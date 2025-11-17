@@ -1,0 +1,21 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (keep schema in repo)
+data/*.csv
+!data/glove_data_schema.csv
+
+# Jupyter (uncomment if you add notebooks)
+# .ipynb_checkpoints/
