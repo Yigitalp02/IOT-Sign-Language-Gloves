@@ -17,5 +17,15 @@ Thumbs.db
 data/*.csv
 !data/glove_data_schema.csv
 
+# Large data folders (professor's dataset - 178MB)
+data/Data/
+
+# Trained models (large binary files - RF model is 156MB)
+# Keep the models directory structure but ignore the actual model files
+models/*.pkl
+models/*.h5
+models/*.tflite
+models/*.onnx
+
 # Jupyter (uncomment if you add notebooks)
 # .ipynb_checkpoints/
