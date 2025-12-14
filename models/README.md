@@ -61,3 +61,5 @@ y_pred = rf_model.predict(X_scaled)
 gesture = label_encoder.inverse_transform(y_pred)
 ```
 
+
+

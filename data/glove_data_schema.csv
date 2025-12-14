@@ -1,6 +1,0 @@
-﻿timestamp_ms,user_id,session_id,class_label,
-ch0_raw,ch1_raw,ch2_raw,ch3_raw,ch4_raw,
-ch0_norm,ch1_norm,ch2_norm,ch3_norm,ch4_norm,
-baseline_ch0,baseline_ch1,baseline_ch2,baseline_ch3,baseline_ch4,
-maxbend_ch0,maxbend_ch1,maxbend_ch2,maxbend_ch3,maxbend_ch4,
-glove_fit,sensor_map_ref,notes
