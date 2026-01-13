@@ -63,3 +63,12 @@ gesture = label_encoder.inverse_transform(y_pred)
 
 
 
+
+
+
+
+
+
+
+
+

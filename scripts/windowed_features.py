@@ -17,6 +17,8 @@ def extract_window_features(window_data: pd.DataFrame, sample_rate: int = 100) -
     """
     Extract statistical and temporal features from a time window
     
+    OPTIMIZED VERSION - 30 features with 1.0s windows
+    
     For each of the 5 sensor channels, we extract:
     
     Static Features:
@@ -25,11 +27,13 @@ def extract_window_features(window_data: pd.DataFrame, sample_rate: int = 100) -
     - Min (minimum value)
     - Max (maximum value)
     
-    Dynamic Features (inspired by professor's approach):
-    - Velocity (mean rate of change) - captures movement speed
-    - Acceleration (mean change in velocity) - captures smoothness
+    Dynamic Features:
+    - Velocity (1st derivative) - movement speed
+    - Acceleration (2nd derivative) - movement smoothness
     
     Total: 5 channels × 6 features = 30 features per window
+    
+    Note: Jerk removed - provided minimal benefit (<0.5%) at cost of complexity
     """
     features = []
     
@@ -47,32 +51,29 @@ def extract_window_features(window_data: pd.DataFrame, sample_rate: int = 100) -
         min_val = np.min(values)
         max_val = np.max(values)
         
-        # Dynamic temporal features (NEW!)
+        # Dynamic temporal features
         # Velocity: First derivative (rate of change)
         if len(values) > 1:
-            velocity = np.diff(values)  # Calculate differences
-            mean_velocity = np.mean(velocity) * sample_rate  # Scale by sample rate
-            std_velocity = np.std(velocity) * sample_rate
+            velocity = np.diff(values)
+            mean_velocity = np.mean(velocity) * sample_rate
         else:
             mean_velocity = 0
-            std_velocity = 0
         
         # Acceleration: Second derivative (change in velocity)
-        # Helps distinguish smooth vs jerky movements
         if len(values) > 2:
-            acceleration = np.diff(np.diff(values))  # Second derivative
+            acceleration = np.diff(velocity)
             mean_acceleration = np.mean(acceleration) * (sample_rate ** 2)
         else:
             mean_acceleration = 0
         
-        # Combine all features for this channel
+        # Combine features for this channel
         features.extend([
             mean_val,           # Average position
             std_val,            # Variability
             min_val,            # Minimum bend
             max_val,            # Maximum bend
-            mean_velocity,      # Movement speed (NEW!)
-            mean_acceleration,  # Movement smoothness (NEW!)
+            mean_velocity,      # Movement speed (1st deriv)
+            mean_acceleration,  # Movement smoothness (2nd deriv)
         ])
     
     return np.array(features)

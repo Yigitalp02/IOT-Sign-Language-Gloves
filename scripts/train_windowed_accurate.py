@@ -15,6 +15,12 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.neural_network import MLPClassifier
 import joblib
 
+# Force use of all CPU cores (Windows fix)
+# Detect available cores
+N_CORES = joblib.cpu_count()
+print(f"\n[SYSTEM INFO] Detected {N_CORES} CPU cores")
+print(f"[SYSTEM INFO] Using all {N_CORES} cores for parallel processing")
+
 class ProgressTracker:
     """Track and display progress for long-running operations"""
     def __init__(self, total_steps, name="Process"):
@@ -83,7 +89,7 @@ def train_random_forest(X_train, y_train, X_test, y_test):
         min_samples_split=5,
         min_samples_leaf=2,
         random_state=42,
-        n_jobs=-1,
+        n_jobs=N_CORES,  # Explicitly use all cores
         verbose=2  # Shows tree-by-tree progress
     )
     
@@ -244,7 +250,7 @@ def leave_one_user_out_cv(X, y, users, model_type='rf'):
                 n_estimators=200,
                 max_depth=30,
                 random_state=42,
-                n_jobs=-1
+                n_jobs=N_CORES  # Explicitly use all cores
             )
         elif model_type == 'gb':
             model = GradientBoostingClassifier(
@@ -304,7 +310,7 @@ def main():
     print(f"{'='*60}")
     
     # Load data
-    X, y, users = load_windowed_data(window_size=0.5, stride=0.25)
+    X, y, users = load_windowed_data(window_size=1.0, stride=0.5)
     if X is None:
         return
     

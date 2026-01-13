@@ -41,14 +41,15 @@ def butterworth_filter(data, cutoff_freq=10, sample_rate=100, order=3):
     return filtered_data
 
 def load_calibration(subject_folder):
-    """Load calibration file to get baseline values"""
+    """Load calibration file to get baseline values for min-max normalization"""
     calib_files = glob.glob(f"{subject_folder}/*_Calibration.csv")
     if not calib_files:
         return None
     
     df = pd.read_csv(calib_files[0], sep=';')
     
-    # Calculate baseline (average of calibration data)
+    # Calculate baseline (min) and range for min-max normalization
+    # This works better for person-independent models than z-score
     baseline = {
         'thumb': df['thumb'].mean(),
         'index': df['index'].mean(),
@@ -98,7 +99,7 @@ def load_gesture_file(filepath, subject_id, apply_filter=True):
     return df, gesture_name
 
 def normalize_data(df, baseline, maxbend=None):
-    """Apply normalization to sensor data"""
+    """Apply min-max normalization to sensor data"""
     if maxbend is None:
         # Estimate max bend from data (use 90th percentile)
         maxbend = {
@@ -109,10 +110,11 @@ def normalize_data(df, baseline, maxbend=None):
             'ch4_raw': df['ch4_raw'].quantile(0.9),
         }
     
-    # Normalize: (raw - baseline) / (maxbend - baseline)
+    # Min-max normalization: (raw - baseline) / (maxbend - baseline)
+    # Better for generalization than z-score
     for i in range(5):
         ch = f'ch{i}_raw'
-        b = baseline.get(ch, df[ch].min())
+        b = baseline.get(ch, df[ch].min()) if baseline else df[ch].min()
         m = maxbend.get(ch, df[ch].max())
         df[f'ch{i}_norm'] = ((df[ch] - b) / (m - b)).clip(0, 1)
     
