@@ -9,15 +9,25 @@ import time
 import argparse
 import random
 
-# ASL Letter definitions (normalized 0-1, where 0=straight, 1=fully bent)
+# ASL Letter definitions - DIRECTLY FROM REAL DATASET (User 001)
+# 15 letters recognizable with flex sensors alone
+# Normalized (0=straight/baseline, 1=fully bent/maxbend)
 ASL_PATTERNS = {
-    'A': {'thumb': 0.9, 'index': 0.9, 'middle': 0.9, 'ring': 0.9, 'pinky': 0.9},  # Closed fist (thumb tucked)
-    'D': {'thumb': 0.1, 'index': 0.1, 'middle': 0.9, 'ring': 0.9, 'pinky': 0.9},  # Index + thumb up
-    'E': {'thumb': 0.9, 'index': 0.3, 'middle': 0.3, 'ring': 0.3, 'pinky': 0.3},  # Four fingers tucked
-    'F': {'thumb': 0.7, 'index': 0.7, 'middle': 0.1, 'ring': 0.1, 'pinky': 0.1},  # OK sign (thumb+index)
-    'I': {'thumb': 0.9, 'index': 0.9, 'middle': 0.9, 'ring': 0.9, 'pinky': 0.1},  # Pinky up
-    'S': {'thumb': 0.6, 'index': 0.9, 'middle': 0.9, 'ring': 0.9, 'pinky': 0.9},  # Fist (thumb wrapped, less bent)
-    'Y': {'thumb': 0.1, 'index': 0.9, 'middle': 0.9, 'ring': 0.9, 'pinky': 0.1},  # Thumb + Pinky extended
+    'A': {'thumb': 0.02, 'index': 0.68, 'middle': 0.78, 'ring': 0.65, 'pinky': 0.68},
+    'B': {'thumb': 0.42, 'index': 0.13, 'middle': 0.24, 'ring': 0.26, 'pinky': 0.32},
+    'C': {'thumb': 0.31, 'index': 0.56, 'middle': 0.70, 'ring': 0.59, 'pinky': 0.59},
+    'D': {'thumb': 0.40, 'index': 0.04, 'middle': 0.74, 'ring': 0.64, 'pinky': 0.66},
+    'E': {'thumb': 0.53, 'index': 0.61, 'middle': 0.81, 'ring': 0.64, 'pinky': 0.64},
+    'F': {'thumb': 0.44, 'index': 0.43, 'middle': 0.13, 'ring': 0.22, 'pinky': 0.33},
+    'I': {'thumb': 0.47, 'index': 0.68, 'middle': 0.74, 'ring': 0.66, 'pinky': 0.22},
+    'K': {'thumb': 0.13, 'index': 0.00, 'middle': 0.35, 'ring': 0.65, 'pinky': 0.66},
+    'O': {'thumb': 0.50, 'index': 0.50, 'middle': 0.58, 'ring': 0.58, 'pinky': 0.54},
+    'S': {'thumb': 0.55, 'index': 0.67, 'middle': 0.74, 'ring': 0.68, 'pinky': 0.69},
+    'T': {'thumb': 0.33, 'index': 0.20, 'middle': 0.67, 'ring': 0.63, 'pinky': 0.68},
+    'V': {'thumb': 0.26, 'index': 0.03, 'middle': 0.02, 'ring': 0.72, 'pinky': 0.65},
+    'W': {'thumb': 0.23, 'index': 0.12, 'middle': 0.11, 'ring': 0.22, 'pinky': 0.73},
+    'X': {'thumb': 0.38, 'index': 0.47, 'middle': 0.71, 'ring': 0.65, 'pinky': 0.71},
+    'Y': {'thumb': 0.00, 'index': 0.58, 'middle': 0.71, 'ring': 0.65, 'pinky': 0.24}
 }
 
 # Raw sensor ranges (ADC values)
@@ -32,8 +42,8 @@ def denormalize(normalized_value, finger):
     return int(baseline + (normalized_value * (maxbend - baseline)))
 
 
-def add_noise(value, noise_level=3):
-    """Add realistic sensor noise."""
+def add_noise(value, noise_level=8):
+    """Add realistic sensor noise (increased from 3 to 8 for more variance)."""
     return value + random.randint(-noise_level, noise_level)
 
 
