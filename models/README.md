@@ -1,76 +1,47 @@
-# Trained Models
+# Models Directory
 
-This directory contains trained machine learning models for gesture recognition.
+This directory contains trained machine learning models for ASL recognition.
 
-## Files (gitignored due to size)
+## 🚫 Models are NOT stored in Git
 
-- `rf_model.pkl` (156 MB) - Random Forest classifier
-- `mlp_model.pkl` (0.27 MB) - Multi-Layer Perceptron neural network
-- `scaler.pkl` (<1 MB) - Feature scaler for normalization
-- `label_encoder.pkl` (<1 MB) - Label encoder for gesture classes
+Model files (`.pkl`, `.h5`) are too large for GitHub and are excluded via `.gitignore`.
 
-## Performance
+## 📦 Available Models
 
-| Model | Accuracy (80/20 split) | LOUO Accuracy |
-|-------|------------------------|---------------|
-| Random Forest | 82.00% | 56.11% ± 7.81% |
-| MLP | 71.13% | Not tested |
+After training with `scripts/train_model.py`, you'll find:
 
-## Regenerate Models
+- `my_glove_model_YYYYMMDD_HHMMSS.pkl` - Trained classifier
+- `my_glove_model_scaler_YYYYMMDD_HHMMSS.pkl` - Feature scaler
+- `my_glove_model_metadata_YYYYMMDD_HHMMSS.pkl` - Model metadata
 
-To train models from scratch:
+## 🔄 How to Get Models
 
+### Option 1: Train Your Own (Recommended)
 ```bash
-cd iot-sign-glove
-python scripts/train_with_professor_data.py
+# Collect data with your glove
+python scripts/collect_data.py
+
+# Train model
+python scripts/train_model.py --data data/my_glove_data
 ```
 
-This will:
-1. Load the professor's dataset (1.26M samples)
-2. Train Random Forest and MLP models
-3. Perform Leave-One-User-Out cross-validation
-4. Save models to this directory
+### Option 2: Download Pre-trained Models
+If available, download from:
+- GitHub Releases
+- Google Drive / Dropbox link
+- Model hosting service
 
-## Model Details
+## 📊 Model Sizes (Why they're excluded)
 
-### Random Forest
-- 100 trees
-- 5 input features (normalized sensor channels)
-- 11 output classes (gestures)
-- Training time: ~2 minutes
+Typical sizes:
+- Random Forest: 50-100 MB
+- Gradient Boosting: 30-80 MB
+- Scaler: <1 MB
+- Deep Learning: 100+ MB
 
-### MLP
-- Architecture: 5 → 128 → 64 → 32 → 11
-- Activation: ReLU
-- Optimizer: Adam
-- Training time: ~5 minutes
+GitHub limit: 100 MB per file
 
-## Usage
+## 💡 Tip
 
-```python
-import joblib
-
-# Load models
-rf_model = joblib.load('models/rf_model.pkl')
-scaler = joblib.load('models/scaler.pkl')
-label_encoder = joblib.load('models/label_encoder.pkl')
-
-# Predict
-X_scaled = scaler.transform(X)
-y_pred = rf_model.predict(X_scaled)
-gesture = label_encoder.inverse_transform(y_pred)
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
+For deployment, compress models or use model quantization to reduce size.
 

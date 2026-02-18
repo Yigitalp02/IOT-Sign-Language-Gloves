@@ -13,24 +13,20 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Data (keep schema in repo)
+# Data files (too large for git)
 data/*.csv
-!data/glove_data_schema.csv
-
-# Large data folders (professor's dataset - 178MB)
-data/Data/
-
-# Windowed feature files (generated, large)
+data/**/*.csv
 data/*.npz
+data/**/*.npz
+data/*.bak
+!data/README.md
 
-# Trained models (large binary files - RF model is 156MB)
-# Keep the models directory structure but ignore the actual model files
+# Models (too large for git, regenerate with training script)
 models/*.pkl
+models/**/*.pkl
 models/*.h5
-models/*.tflite
-models/*.onnx
-models/windowed/*.pkl
-models/windowed/*.h5
+models/**/*.h5
+!models/README.md
 
 # Jupyter (uncomment if you add notebooks)
 # .ipynb_checkpoints/
