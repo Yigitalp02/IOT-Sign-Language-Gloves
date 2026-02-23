@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -13,20 +13,17 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Data files (too large for git)
+# Data (keep schema in repo)
 data/*.csv
-data/**/*.csv
-data/*.npz
-data/**/*.npz
-data/*.bak
-!data/README.md
 
-# Models (too large for git, regenerate with training script)
+# Large data and models (exceed GitHub 100MB limit)
+data/Data/professor_data_combined.csv
+models/windowed/
+
+# Trained models (regenerate with scripts/train_model.py)
 models/*.pkl
-models/**/*.pkl
-models/*.h5
-models/**/*.h5
-!models/README.md
+models/*.meta.joblib
+!data/glove_data_schema.csv
 
 # Jupyter (uncomment if you add notebooks)
 # .ipynb_checkpoints/

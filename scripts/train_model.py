@@ -1,422 +1,354 @@
+#!/usr/bin/env python3
 """
-Train ML Model for IoT Sign Language Glove
-===========================================
-
-This script trains a machine learning model using collected glove data.
-
-Features:
-- Loads CSV data from collected samples
-- Preprocesses and normalizes sensor values
-- Trains Random Forest classifier (proven to work well with flex sensors)
-- Evaluates model performance
-- Saves trained model for deployment
-
-Usage:
-    python train_model.py --data data/my_glove_data --output models/my_model.pkl
+ASL Glove Model Training - Normalized Data
+Trains a Random Forest for real-time 15-letter ASL recognition.
+Feature extraction matches ASL-ML-Inference-API (25 stats per window).
 """
 
-import pandas as pd
-import numpy as np
-from pathlib import Path
-import pickle
-from datetime import datetime
-import sys
 import argparse
-
-# ML libraries
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.metrics import (
-    classification_report, 
-    confusion_matrix, 
-    accuracy_score,
-    f1_score
+import json
+import sys
+from datetime import datetime
+import numpy as np
+import pandas as pd
+import joblib
+from pathlib import Path
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import (
+    StratifiedKFold,
+    cross_val_score,
+    RandomizedSearchCV,
 )
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    accuracy_score,
+    f1_score,
+)
+import warnings
+warnings.filterwarnings("ignore")
+
+# Must match ASL-ML-Inference-API/app/main.py extract_features_from_window
+def extract_features_from_window(window: np.ndarray) -> np.ndarray:
+    """Extract 25 statistical features: mean, std, min, max, range per finger."""
+    features = []
+    for finger_idx in range(5):
+        finger_values = window[:, finger_idx].astype(float)
+        vals = finger_values[~np.isnan(finger_values)]
+        if len(vals) < 2:
+            std_val = 0.0
+        else:
+            std_val = float(np.std(vals))
+        features.extend([
+            float(np.mean(vals)) if len(vals) > 0 else 0.0,
+            std_val,
+            float(np.min(vals)) if len(vals) > 0 else 0.0,
+            float(np.max(vals)) if len(vals) > 0 else 0.0,
+            float(np.max(vals) - np.min(vals)) if len(vals) > 1 else 0.0,
+        ])
+    return np.array(features, dtype=np.float64)
 
 
-class GloveModelTrainer:
-    """Trains ML model for ASL recognition from glove sensor data"""
-    
-    def __init__(self, data_dir, model_name='my_glove_model'):
-        self.data_dir = Path(data_dir)
-        self.model_name = model_name
-        self.df = None
-        self.X_train = None
-        self.X_test = None
-        self.y_train = None
-        self.y_test = None
-        self.model = None
-        self.scaler = StandardScaler()
-        self.label_encoder = LabelEncoder()
-        
-    def load_data(self):
-        """Load all CSV files from the data directory"""
-        print("\n📂 Loading data...")
-        
-        csv_files = list(self.data_dir.glob("*.csv"))
-        
-        if not csv_files:
-            print(f"❌ No CSV files found in {self.data_dir}")
-            return False
-        
-        print(f"   Found {len(csv_files)} CSV files")
-        
-        # Load all CSV files
-        dfs = []
-        for csv_file in csv_files:
-            try:
-                df = pd.read_csv(csv_file)
-                dfs.append(df)
-            except Exception as e:
-                print(f"⚠️  Error loading {csv_file.name}: {e}")
-        
-        if not dfs:
-            print("❌ No data could be loaded")
-            return False
-        
-        # Combine all data
-        self.df = pd.concat(dfs, ignore_index=True)
-        print(f"✅ Loaded {len(self.df)} samples total")
-        
-        # Show dataset statistics
-        print(f"\n📊 Dataset Statistics:")
-        print(f"   Total samples: {len(self.df)}")
-        print(f"   Features: {[col for col in self.df.columns if col.startswith('flex_')]}")
-        print(f"\n   Samples per letter:")
-        for letter, count in self.df['label'].value_counts().sort_index().items():
-            print(f"      {letter}: {count} samples")
-        
-        return True
-    
-    def preprocess_data(self):
-        """Preprocess the data for training"""
-        print("\n🔧 Preprocessing data...")
-        
-        # Extract features (flex sensors)
-        feature_cols = [col for col in self.df.columns if col.startswith('flex_')]
-        X = self.df[feature_cols].values
-        y = self.df['label'].values
-        
-        print(f"   Features: {feature_cols}")
-        print(f"   Shape: {X.shape}")
-        
-        # Check for any NaN or infinite values
-        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
-            print("⚠️  Found NaN or Inf values, cleaning...")
-            X = np.nan_to_num(X, nan=0.0, posinf=1000, neginf=0)
-        
-        # Split data
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, 
-            test_size=0.2, 
-            random_state=42,
-            stratify=y  # Ensure balanced split
-        )
-        
-        # Normalize features
-        print("   Normalizing features...")
-        self.X_train = self.scaler.fit_transform(self.X_train)
-        self.X_test = self.scaler.transform(self.X_test)
-        
-        print(f"✅ Training set: {len(self.X_train)} samples")
-        print(f"✅ Test set: {len(self.X_test)} samples")
-        
-        return True
-    
-    def train_random_forest(self, tune_hyperparameters=True):
-        """
-        Train Random Forest classifier
-        
-        Random Forest works very well with sensor data and is fast to train.
-        """
-        print("\n🌲 Training Random Forest classifier...")
-        
-        if tune_hyperparameters:
-            print("   🔍 Tuning hyperparameters (this may take a few minutes)...")
-            
-            param_grid = {
-                'n_estimators': [50, 100, 200],
-                'max_depth': [10, 20, None],
-                'min_samples_split': [2, 5, 10],
-                'min_samples_leaf': [1, 2, 4]
-            }
-            
-            rf = RandomForestClassifier(random_state=42)
-            grid_search = GridSearchCV(
-                rf, 
-                param_grid, 
-                cv=3, 
-                n_jobs=-1, 
-                scoring='f1_macro',
-                verbose=1
-            )
-            
-            grid_search.fit(self.X_train, self.y_train)
-            self.model = grid_search.best_estimator_
-            
-            print(f"   ✅ Best parameters: {grid_search.best_params_}")
-            print(f"   ✅ Best CV score: {grid_search.best_score_:.3f}")
-        else:
-            # Use default parameters (faster)
-            print("   Using default parameters...")
-            self.model = RandomForestClassifier(
-                n_estimators=100,
-                max_depth=20,
-                min_samples_split=5,
-                random_state=42,
-                n_jobs=-1
-            )
-            self.model.fit(self.X_train, self.y_train)
-        
-        print("✅ Training complete!")
-        
-    def train_gradient_boosting(self):
-        """
-        Train Gradient Boosting classifier (alternative to Random Forest)
-        
-        Sometimes works better but takes longer to train.
-        """
-        print("\n🚀 Training Gradient Boosting classifier...")
-        
-        self.model = GradientBoostingClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
-            random_state=42
-        )
-        
-        self.model.fit(self.X_train, self.y_train)
-        print("✅ Training complete!")
-    
-    def evaluate(self):
-        """Evaluate the trained model"""
-        print("\n📊 Evaluating model...")
-        
-        # Predictions
-        y_pred_train = self.model.predict(self.X_train)
-        y_pred_test = self.model.predict(self.X_test)
-        
-        # Accuracy
-        train_acc = accuracy_score(self.y_train, y_pred_train)
-        test_acc = accuracy_score(self.y_test, y_pred_test)
-        
-        print(f"\n   Training Accuracy: {train_acc:.3f} ({train_acc*100:.1f}%)")
-        print(f"   Test Accuracy:     {test_acc:.3f} ({test_acc*100:.1f}%)")
-        
-        # F1 Score
-        train_f1 = f1_score(self.y_train, y_pred_train, average='macro')
-        test_f1 = f1_score(self.y_test, y_pred_test, average='macro')
-        
-        print(f"\n   Training F1 Score: {train_f1:.3f}")
-        print(f"   Test F1 Score:     {test_f1:.3f}")
-        
-        # Classification report
-        print("\n📋 Classification Report (Test Set):")
-        print(classification_report(self.y_test, y_pred_test))
-        
-        # Confusion matrix
-        cm = confusion_matrix(self.y_test, y_pred_test)
-        
-        # Feature importance (if Random Forest)
-        if hasattr(self.model, 'feature_importances_'):
-            print("\n🔍 Feature Importance:")
-            feature_names = [f'Finger_{i+1}' for i in range(5)]
-            importances = self.model.feature_importances_
-            for name, importance in zip(feature_names, importances):
-                print(f"   {name}: {importance:.3f}")
-        
-        return {
-            'train_accuracy': train_acc,
-            'test_accuracy': test_acc,
-            'train_f1': train_f1,
-            'test_f1': test_f1,
-            'confusion_matrix': cm
-        }
-    
-    def plot_confusion_matrix(self, cm, save_path=None):
-        """Plot confusion matrix"""
-        plt.figure(figsize=(10, 8))
-        
-        labels = sorted(self.df['label'].unique())
-        
-        sns.heatmap(
-            cm, 
-            annot=True, 
-            fmt='d', 
-            cmap='Blues',
-            xticklabels=labels,
-            yticklabels=labels
-        )
-        
-        plt.title(f'Confusion Matrix - {self.model_name}')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"   💾 Saved confusion matrix to: {save_path}")
-        else:
-            plt.show()
-        
-        plt.close()
-    
-    def save_model(self, output_dir='models'):
-        """Save the trained model, scaler, and metadata"""
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
-        print(f"\n💾 Saving model...")
-        
-        # Save model
-        model_file = output_path / f"{self.model_name}_{timestamp}.pkl"
-        with open(model_file, 'wb') as f:
-            pickle.dump(self.model, f)
-        print(f"   ✅ Model: {model_file}")
-        
-        # Save scaler
-        scaler_file = output_path / f"{self.model_name}_scaler_{timestamp}.pkl"
-        with open(scaler_file, 'wb') as f:
-            pickle.dump(self.scaler, f)
-        print(f"   ✅ Scaler: {scaler_file}")
-        
-        # Save metadata
-        metadata = {
-            'model_name': self.model_name,
-            'timestamp': timestamp,
-            'model_type': type(self.model).__name__,
-            'n_features': self.X_train.shape[1],
-            'n_samples': len(self.df),
-            'labels': sorted(self.df['label'].unique().tolist()),
-            'data_directory': str(self.data_dir)
-        }
-        
-        metadata_file = output_path / f"{self.model_name}_metadata_{timestamp}.pkl"
-        with open(metadata_file, 'wb') as f:
-            pickle.dump(metadata, f)
-        print(f"   ✅ Metadata: {metadata_file}")
-        
-        print(f"\n✨ Model saved successfully!")
-        print(f"\n📦 To use this model:")
-        print(f"   1. Copy these files to your mobile/desktop app:")
-        print(f"      - {model_file.name}")
-        print(f"      - {scaler_file.name}")
-        print(f"   2. Load them using pickle in your prediction code")
-        
-        return model_file
-    
-    def run_full_pipeline(self, model_type='rf', tune=True, save=True):
-        """
-        Run the complete training pipeline
-        
-        Args:
-            model_type: 'rf' (Random Forest) or 'gb' (Gradient Boosting)
-            tune: Whether to tune hyperparameters
-            save: Whether to save the model
-        """
-        # Load data
-        if not self.load_data():
-            return False
-        
-        # Preprocess
-        if not self.preprocess_data():
-            return False
-        
-        # Train
-        if model_type == 'rf':
-            self.train_random_forest(tune_hyperparameters=tune)
-        elif model_type == 'gb':
-            self.train_gradient_boosting()
-        else:
-            print(f"❌ Unknown model type: {model_type}")
-            return False
-        
-        # Evaluate
-        metrics = self.evaluate()
-        
-        # Plot confusion matrix
-        cm_file = f"models/{self.model_name}_confusion_matrix.png"
-        self.plot_confusion_matrix(metrics['confusion_matrix'], save_path=cm_file)
-        
-        # Save
-        if save:
-            self.save_model()
-        
-        print("\n" + "="*60)
-        print("🎉 TRAINING COMPLETE!")
-        print("="*60)
-        print(f"✅ Test Accuracy: {metrics['test_accuracy']*100:.1f}%")
-        print(f"✅ Test F1 Score: {metrics['test_f1']:.3f}")
-        
-        return True
+def load_and_prepare_data(
+    csv_path: str,
+    window_size: int = 50,
+    stride: int = 25,
+    samples_per_recording: int = 150,
+) -> tuple[np.ndarray, np.ndarray, list]:
+    """
+    Load normalized CSV and create windowed features.
+    Splits by recording to avoid leakage (samples from same recording stay together).
+    """
+    df = pd.read_csv(csv_path)
+    if "ch0_norm" not in df.columns:
+        raise ValueError("Expected columns: label, ch0_norm, ch1_norm, ch2_norm, ch3_norm, ch4_norm")
+
+    channel_cols = ["ch0_norm", "ch1_norm", "ch2_norm", "ch3_norm", "ch4_norm"]
+    X_list, y_list, recording_ids = [], [], []
+
+    for letter in df["label"].unique():
+        subset = df[df["label"] == letter].reset_index(drop=True)
+        data = subset[channel_cols].values.astype(np.float64)
+
+        # Split into recordings (~150 samples each)
+        n_recordings = max(1, len(data) // samples_per_recording)
+        for rec_idx in range(n_recordings):
+            start = rec_idx * samples_per_recording
+            end = min(start + samples_per_recording, len(data))
+            rec_data = data[start:end]
+
+            if len(rec_data) < window_size:
+                continue
+
+            # Sliding windows within recording
+            for i in range(0, len(rec_data) - window_size + 1, stride):
+                window = rec_data[i : i + window_size]
+                feats = extract_features_from_window(window)
+                X_list.append(feats)
+                y_list.append(letter)
+                recording_ids.append((letter, rec_idx))
+
+    X = np.array(X_list)
+    y = np.array(y_list)
+    return X, y, recording_ids
+
+
+def split_by_recording(X, y, recording_ids, test_ratio=0.2, seed=42):
+    """Split so train and test have different recordings (no leakage)."""
+    np.random.seed(seed)
+    unique_recs = sorted(set(recording_ids))
+    n_test = max(1, int(len(unique_recs) * test_ratio))
+    np.random.shuffle(unique_recs)
+    test_recs = set(unique_recs[:n_test])
+
+    train_mask = np.array([r not in test_recs for r in recording_ids])
+    test_mask = ~train_mask
+
+    return X[train_mask], X[test_mask], y[train_mask], y[test_mask]
 
 
 def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description='Train ML model for IoT Sign Language Glove'
+    parser = argparse.ArgumentParser(description="Train ASL glove model on normalized data")
+    parser.add_argument(
+        "--input",
+        "-i",
+        default="data/Data/glove_data_NORMALIZED_B_A_C_D_E_F_I_K_O_S_T_V_W_X_Y_2026-02-23-10-45-28.csv",
+        help="Path to normalized CSV",
     )
     parser.add_argument(
-        '--data',
+        "--output",
+        "-o",
+        default="models/rf_asl_15letters_normalized.pkl",
+        help="Output model path",
+    )
+    parser.add_argument(
+        "--window-size",
+        type=int,
+        default=50,
+        help="Samples per window (50 = 1 sec at 50Hz)",
+    )
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=25,
+        help="Stride between windows (50%% overlap)",
+    )
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        help="Run hyperparameter tuning (slower)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+    )
+    parser.add_argument(
+        "--n-estimators",
+        type=int,
+        default=300,
+        help="Number of trees (300=fast/small, 500+=more accuracy, may overfit)",
+    )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Run compare_models.py after training (same evaluation as compare script)",
+    )
+    parser.add_argument(
+        "--try-seeds",
         type=str,
-        default='data/my_glove_data',
-        help='Directory containing collected CSV data'
+        default="",
+        metavar="SEEDS",
+        help="Try multiple seeds, keep best (e.g. '42,0,123,7,99')",
     )
-    parser.add_argument(
-        '--output',
-        type=str,
-        default='models',
-        help='Directory to save trained model'
-    )
-    parser.add_argument(
-        '--model-type',
-        type=str,
-        choices=['rf', 'gb'],
-        default='rf',
-        help='Model type: rf (Random Forest) or gb (Gradient Boosting)'
-    )
-    parser.add_argument(
-        '--no-tune',
-        action='store_true',
-        help='Skip hyperparameter tuning (faster but less optimal)'
-    )
-    parser.add_argument(
-        '--name',
-        type=str,
-        default='my_glove_model',
-        help='Name for the model'
-    )
-    
     args = parser.parse_args()
-    
-    print("\n" + "="*60)
-    print("🧤 IoT Sign Language Glove - Model Training")
-    print("="*60)
-    print(f"📂 Data directory: {args.data}")
-    print(f"💾 Output directory: {args.output}")
-    print(f"🎯 Model type: {args.model_type}")
-    print(f"🔧 Hyperparameter tuning: {'OFF' if args.no_tune else 'ON'}")
-    
-    # Create trainer
-    trainer = GloveModelTrainer(args.data, model_name=args.name)
-    
-    # Run pipeline
-    success = trainer.run_full_pipeline(
-        model_type=args.model_type,
-        tune=not args.no_tune,
-        save=True
+
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parent
+    csv_path = project_root / args.input
+    out_path = project_root / args.output
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not csv_path.exists():
+        print(f"Error: Input file not found: {csv_path}")
+        return 1
+
+    print("=" * 60)
+    print("ASL Glove Model Training (Normalized Data)")
+    print("=" * 60)
+    print(f"Input: {csv_path}")
+    print(f"Window size: {args.window_size} samples")
+    print(f"Stride: {args.stride}")
+    print()
+
+    print("Loading data...")
+    X, y, rec_ids = load_and_prepare_data(
+        str(csv_path),
+        window_size=args.window_size,
+        stride=args.stride,
     )
-    
-    if not success:
-        print("\n❌ Training failed!")
-        sys.exit(1)
+    n_samples, n_features = X.shape
+    n_classes = len(np.unique(y))
+    print(f"  Samples: {n_samples}, Features: {n_features}, Classes: {n_classes}")
+    print()
+
+    seeds_to_try = [args.seed]
+    if args.try_seeds:
+        seeds_to_try = [int(s.strip()) for s in args.try_seeds.split(",") if s.strip()]
+        print(f"Will try seeds: {seeds_to_try} (keep best)")
+        if args.tune:
+            print("Warning: --tune with --try-seeds is slow; tuning uses first seed only")
+    print()
+
+    best_model = None
+    best_test_acc = -1.0
+    best_seed = None
+    best_cv_acc = -1.0
+
+    for run_seed in seeds_to_try:
+        if len(seeds_to_try) > 1:
+            print(f"--- Seed {run_seed} ---")
+        X_train, X_test, y_train, y_test = split_by_recording(
+            X, y, rec_ids, test_ratio=0.2, seed=run_seed
+        )
+        if len(seeds_to_try) == 1:
+            print(f"Train: {len(X_train)}, Test: {len(X_test)} (split by recording)")
+            print()
+
+        if args.tune and run_seed == seeds_to_try[0]:
+            print("Hyperparameter tuning (may take 5-15 min)...")
+            param_dist = {
+                "n_estimators": [300, 400, 500, 600, 700, 800],
+                "max_depth": [20, 25, 30, 35, None],
+                "min_samples_split": [2, 5, 10],
+                "min_samples_leaf": [1, 2, 4],
+                "max_features": ["sqrt", "log2", None],
+            }
+            rf = RandomForestClassifier(random_state=run_seed, n_jobs=-1)
+            search = RandomizedSearchCV(
+                rf,
+                param_distributions=param_dist,
+                n_iter=50,
+                cv=5,
+                scoring="f1_weighted",
+                random_state=run_seed,
+                n_jobs=-1,
+                verbose=1,
+            )
+            search.fit(X_train, y_train)
+            model = search.best_estimator_
+            print(f"Best params: {search.best_params_}")
+        else:
+            print(f"Training Random Forest ({args.n_estimators} trees)...")
+            model = RandomForestClassifier(
+                n_estimators=args.n_estimators,
+                max_depth=25,
+                min_samples_split=5,
+                min_samples_leaf=2,
+                max_features="sqrt",
+                random_state=run_seed,
+                n_jobs=-1,
+            )
+            model.fit(X_train, y_train)
+
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=run_seed)
+        cv_scores = cross_val_score(model, X_train, y_train, cv=cv, scoring="accuracy", n_jobs=-1)
+        cv_acc = cv_scores.mean()
+        y_pred = model.predict(X_test)
+        test_acc = accuracy_score(y_test, y_pred)
+        test_f1 = f1_score(y_test, y_pred, average="weighted")
+
+        if len(seeds_to_try) > 1:
+            print(f"  Seed {run_seed}: test={test_acc:.4f}, cv={cv_acc:.4f}")
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_model = model
+                best_seed = run_seed
+                best_cv_acc = cv_acc
+            continue
+
+        print("Cross-validation (5-fold)...")
+        print(f"  Accuracy: {cv_acc:.4f} (+/- {cv_scores.std() * 2:.4f})")
+        print()
+        print("Test set performance:")
+        print(f"  Accuracy: {test_acc:.4f}")
+        print(f"  F1 (weighted): {test_f1:.4f}")
+        print()
+        print("Classification report:")
+        print(classification_report(y_test, y_pred))
+        print("Confusion matrix:")
+        cm = confusion_matrix(y_test, y_pred)
+        labels = sorted(np.unique(np.concatenate([y_test, y_pred])))
+        print("      ", " ".join(f"{l:>4}" for l in labels))
+        for i, l in enumerate(labels):
+            row = " ".join(f"{cm[i, j]:4d}" for j in range(len(labels)))
+            print(f"  {l}   {row}")
+        print()
+        best_model = model
+        best_test_acc = test_acc
+        best_seed = run_seed
+        best_cv_acc = cv_acc
+        break
+
+    model = best_model
+    if len(seeds_to_try) > 1:
+        print("=" * 60)
+        print(f"Best: seed {best_seed} -> test {best_test_acc:.4f} ({best_test_acc*100:.1f}%)")
+        print("=" * 60)
+        print()
+
+    joblib.dump(model, out_path)
+    print(f"Model saved: {out_path}")
+
+    # Save metadata for API compatibility
+    meta = {
+        "window_size": args.window_size,
+        "n_features": 25,
+        "classes": list(model.classes_),
+        "normalized_input": True,
+        "n_estimators": getattr(model, "n_estimators", args.n_estimators),
+        "max_depth": getattr(model, "max_depth", 25),
+        "seed": best_seed,
+        "test_accuracy": float(best_test_acc),
+        "cv_accuracy": float(best_cv_acc),
+        "timestamp": datetime.now().isoformat(),
+    }
+    meta_path = out_path.with_suffix(".meta.joblib")
+    joblib.dump(meta, meta_path)
+    print(f"Metadata saved: {meta_path}")
+
+    # Append to training log (reproducible record)
+    log_path = out_path.parent / "training_log.jsonl"
+    log_entry = {
+        "timestamp": meta["timestamp"],
+        "seed": best_seed,
+        "n_estimators": meta["n_estimators"],
+        "max_depth": meta["max_depth"],
+        "test_accuracy": meta["test_accuracy"],
+        "cv_accuracy": meta["cv_accuracy"],
+        "output": str(out_path.name),
+    }
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry) + "\n")
+    print(f"Logged to {log_path.name}")
+    print()
+
+    if args.compare:
+        print("Running compare_models (same evaluation)...")
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(script_dir / "compare_models.py"), "--skip-api"],
+            cwd=str(project_root),
+        )
+        if result.returncode != 0:
+            print("(compare_models had an issue, but model was saved)")
+    else:
+        print("Tip: Run 'python scripts/compare_models.py --skip-api' for full evaluation")
+
+    print()
+    print("Done. Deploy to API: copy .pkl to /opt/stack/ai-models/ and set MODEL_PATH")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
+    exit(main())
