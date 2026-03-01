@@ -21,23 +21,32 @@ from typing import List, Union, Dict, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
-# Prefer the preserved 96% model; fallback to latest
-MODEL_PATH = MODELS_DIR / "rf_asl_15letters_normalized_96pct_seed1.pkl"
-if not MODEL_PATH.exists():
-    MODEL_PATH = MODELS_DIR / "rf_asl_15letters_normalized.pkl"
+# Priority: newest 97.7% model → 96% model → generic fallback
+_candidates = [
+    "rf_asl_15letters_normalized_97pct_seed1_feb26.pkl",
+    "rf_asl_15letters_normalized_96pct_seed1.pkl",
+    "rf_asl_15letters_normalized.pkl",
+]
+MODEL_PATH = next((MODELS_DIR / c for c in _candidates if (MODELS_DIR / c).exists()), None)
 
-# Feature extraction - must match API and training
+# Feature extraction — must match train_model.py exactly
+# 45 features: mean, std, min, max, range × 9 channels (5 flex + 4 quaternion)
 def extract_features_from_window(window: np.ndarray) -> np.ndarray:
+    # Pad legacy 5-column input with identity quaternion
+    if window.shape[1] < 9:
+        pad = np.zeros((window.shape[0], 9 - window.shape[1]))
+        pad[:, 0] = 1.0   # qw = 1 (identity)
+        window = np.hstack([window, pad])
     features = []
-    for i in range(5):
+    for i in range(9):
         v = window[:, i].astype(float)
         v = v[~np.isnan(v)]
         std_val = float(np.std(v)) if len(v) >= 2 else 0.0
         features.extend([
             float(np.mean(v)) if len(v) > 0 else 0.0,
             std_val,
-            float(np.min(v)) if len(v) > 0 else 0.0,
-            float(np.max(v)) if len(v) > 0 else 0.0,
+            float(np.min(v))  if len(v) > 0 else 0.0,
+            float(np.max(v))  if len(v) > 0 else 0.0,
             float(np.max(v) - np.min(v)) if len(v) > 1 else 0.0,
         ])
     return np.array(features, dtype=np.float64)
@@ -51,7 +60,7 @@ model_name = "not loaded"
 @app.on_event("startup")
 def startup():
     global model, model_name
-    if MODEL_PATH.exists():
+    if MODEL_PATH and MODEL_PATH.exists():
         model = joblib.load(MODEL_PATH)
         model_name = MODEL_PATH.stem
         meta_path = MODEL_PATH.with_suffix(".meta.joblib")
@@ -64,7 +73,7 @@ def startup():
                 pass
         print(f"Model loaded: {model_name}{acc}")
     else:
-        print(f"ERROR: Model not found at {MODEL_PATH}")
+        print(f"ERROR: No model found in {MODELS_DIR}")
 
 class SensorData(BaseModel):
     flex_sensors: Union[List[List[float]], List[float]]

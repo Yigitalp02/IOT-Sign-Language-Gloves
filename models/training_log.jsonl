@@ -1,2 +1,7 @@
 {"timestamp": "2026-02-23T23:40:08.370679", "seed": 42, "n_estimators": 300, "max_depth": 25, "test_accuracy": 0.9377777777777778, "cv_accuracy": 0.9717391304347827, "output": "rf_asl_15letters_normalized.pkl"}
 {"timestamp": "2026-02-23T23:40:42.067992", "seed": 1, "n_estimators": 300, "max_depth": 25, "test_accuracy": 0.96, "cv_accuracy": 0.9630434782608696, "output": "rf_asl_15letters_normalized.pkl"}
+{"timestamp": "2026-03-01T02:11:24.187381", "seed": 1, "n_estimators": 300, "max_depth": 25, "test_accuracy": 0.9766666666666667, "cv_accuracy": 0.9958333333333333, "output": "rf_asl_15letters_newdata_feb26.pkl"}
+{"timestamp": "2026-03-01T02:11:46.842734", "seed": 1, "n_estimators": 300, "max_depth": 25, "test_accuracy": 0.9766666666666667, "cv_accuracy": 0.9958333333333333, "output": "rf_asl_15letters_normalized_97pct_seed1_feb26.pkl"}
+{"timestamp": "2026-03-01T02:48:15.437753", "seed": 1, "n_estimators": 300, "max_depth": 25, "test_accuracy": 0.98, "cv_accuracy": 0.9950000000000001, "n_classes": 15, "has_imu": true, "output": "rf_test_backward_compat.pkl"}
+{"timestamp": "2026-03-01T02:50:30.157976", "seed": 1, "n_estimators": 300, "max_depth": 25, "test_accuracy": 0.9766666666666667, "cv_accuracy": 0.9966666666666667, "n_classes": 15, "has_imu": true, "output": "rf_test_45features.pkl"}
+{"timestamp": "2026-03-01T02:52:59.733904", "seed": 1, "n_estimators": 300, "max_depth": 25, "test_accuracy": 0.9866666666666667, "cv_accuracy": 0.9966666666666667, "n_classes": 15, "has_imu": true, "output": "rf_test_uniform_quat.pkl"}

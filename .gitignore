@@ -23,9 +23,11 @@ models/windowed/
 # Trained models (regenerate with scripts/train_model.py)
 models/*.pkl
 models/*.meta.joblib
-# Exception: track the 96% production model
+# Exception: track production models
 !models/rf_asl_15letters_normalized_96pct_seed1.pkl
 !models/rf_asl_15letters_normalized_96pct_seed1.meta.joblib
+!models/rf_asl_15letters_normalized_97pct_seed1_feb26.pkl
+!models/rf_asl_15letters_normalized_97pct_seed1_feb26.meta.joblib
 !data/glove_data_schema.csv
 
 # Jupyter (uncomment if you add notebooks)
