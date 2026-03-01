@@ -23,6 +23,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 # Priority: newest 97.7% model → 96% model → generic fallback
 _candidates = [
+    "rf_asl_15letters_normalized_97pct_45feat_seed1_feb26.pkl",
     "rf_asl_15letters_normalized_97pct_seed1_feb26.pkl",
     "rf_asl_15letters_normalized_96pct_seed1.pkl",
     "rf_asl_15letters_normalized.pkl",
