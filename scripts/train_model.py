@@ -96,44 +96,33 @@ def extract_features_from_window(window: np.ndarray) -> np.ndarray:
 
 
 # ── Quaternion augmentation ───────────────────────────────────────────────────
-def augment_with_quaternion(df: pd.DataFrame, sigma: float = 0.04, seed: int = 0) -> pd.DataFrame:
+def pad_with_identity_quaternion(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Attach uniformly random unit quaternions to a flex-only DataFrame.
+    Pad a flex-only DataFrame with an identity quaternion (qw=1, qx=qy=qz=0).
 
-    These letters are orientation-invariant — the same flex pattern should be
-    recognised at ANY wrist angle.  We therefore sample quaternions uniformly
-    over the full rotation sphere (Shoemake 1992) rather than near-identity,
-    so the model never learns that a particular orientation implies a letter.
-
-    `sigma` is kept as a parameter for API compatibility but is no longer used;
-    the distribution is always the full uniform sphere.
+    Per-window random augmentation is done later in prepare_windows, so that
+    each 50-sample window gets ONE consistent quaternion — matching how real
+    inference data looks (hand is stable within a single window).
     """
-    rng = np.random.default_rng(seed)
-    n = len(df)
-
-    # Uniform random unit quaternions: sample 4 standard normals then normalise
-    raw   = rng.standard_normal((n, 4))
-    norms = np.linalg.norm(raw, axis=1, keepdims=True)
-    q     = raw / norms            # shape (n, 4) — uniform on S³
-
     df = df.copy()
-    df["qw"] = q[:, 0]
-    df["qx"] = q[:, 1]
-    df["qy"] = q[:, 2]
-    df["qz"] = q[:, 3]
+    df["qw"] = 1.0
+    df["qx"] = 0.0
+    df["qy"] = 0.0
+    df["qz"] = 0.0
     return df
 
 
 # ── Multi-CSV loader ──────────────────────────────────────────────────────────
-def load_combined_data(csv_paths: list[str], aug_sigma: float = 0.04, aug_seed: int = 0) -> pd.DataFrame:
+def load_combined_data(csv_paths: list[str]) -> tuple[pd.DataFrame, set[str]]:
     """
     Load one or more CSVs, auto-detect format, merge with priority rules:
 
       • Letters in ANY 9-column CSV → use real IMU data, ignore flex-only rows.
-      • Letters ONLY in 5-column CSV → augment with random quaternions.
+      • Letters ONLY in 5-column CSV → pad with identity quaternion for now;
+        per-window random augmentation happens later in prepare_windows.
 
-    This means re-recorded letters (D, K) in the IMU CSV automatically
-    replace the old recordings of those letters in the flex CSV.
+    Returns (combined_df, imu_letters) so the caller can pass imu_letters
+    to prepare_windows for per-window quaternion augmentation.
     """
     flex_frames: list[pd.DataFrame] = []
     imu_frames:  list[pd.DataFrame] = []
@@ -165,7 +154,7 @@ def load_combined_data(csv_paths: list[str], aug_sigma: float = 0.04, aug_seed: 
     if imu_frames:
         parts.append(pd.concat(imu_frames, ignore_index=True))
 
-    # Flex frames: drop letters that have real IMU, augment the rest
+    # Flex frames: drop letters that have real IMU, pad rest with identity quat
     if flex_frames:
         flex_all = pd.concat(flex_frames, ignore_index=True)
         flex_keep = flex_all[~flex_all["label"].isin(imu_letters)].copy()
@@ -174,7 +163,8 @@ def load_combined_data(csv_paths: list[str], aug_sigma: float = 0.04, aug_seed: 
             skipped = set(flex_all["label"].unique()) - set(flex_keep["label"].unique())
             if skipped:
                 print(f"  Skipping from flex CSV (replaced by IMU CSV): {sorted(skipped)}")
-            flex_keep = augment_with_quaternion(flex_keep, sigma=aug_sigma, seed=aug_seed)
+            # Pad with identity; per-window random augmentation done in prepare_windows
+            flex_keep = pad_with_identity_quaternion(flex_keep)
             parts.append(flex_keep)
 
     if not parts:
@@ -185,28 +175,41 @@ def load_combined_data(csv_paths: list[str], aug_sigma: float = 0.04, aug_seed: 
     flex_only_letters = sorted(set(combined["label"].unique()) - imu_letters)
     print()
     print(f"  Real IMU data   : {sorted(imu_letters) if imu_letters else 'none'}")
-    print(f"  Augmented quat  : {flex_only_letters}")
+    print(f"  Orientation-aug : {flex_only_letters}  (per-window, not per-row)")
     print(f"  Total rows      : {len(combined):,}")
-    return combined
+    return combined, imu_letters
 
 
 # ── Windowed feature extraction ───────────────────────────────────────────────
 def prepare_windows(
     df: pd.DataFrame,
+    flex_only_letters: set,
     window_size: int = 50,
     stride: int = 25,
     samples_per_recording: int = 150,
+    aug_per_window: int = 8,
+    seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, list]:
     """
-    Slide windows over each recording, extract 29-feature vectors.
+    Slide windows over each recording and extract 45-feature vectors.
+
+    For flex-only letters (no real IMU), each window is replicated
+    aug_per_window times, each time with ONE consistent random quaternion
+    applied to all 50 samples in that window.  This correctly models what
+    inference looks like: the hand holds a stable orientation for the entire
+    window, so mean(qw) ≈ constant and std(qw) ≈ 0 — not near-zero mean with
+    high std as per-row augmentation falsely produced.
+
     Recordings are kept separate to avoid train/test leakage.
     """
-    channel_cols = ALL_COLS  # always 9 columns (IMU was added for flex-only letters)
+    rng = np.random.default_rng(seed)
+    channel_cols = ALL_COLS
     X_list, y_list, recording_ids = [], [], []
 
     for letter in df["label"].unique():
         subset = df[df["label"] == letter].reset_index(drop=True)
         data = subset[channel_cols].values.astype(np.float64)
+        is_flex_only = letter in flex_only_letters
 
         n_recordings = max(1, len(data) // samples_per_recording)
         for rec_idx in range(n_recordings):
@@ -218,11 +221,26 @@ def prepare_windows(
                 continue
 
             for i in range(0, len(rec_data) - window_size + 1, stride):
-                window  = rec_data[i : i + window_size]
-                feats   = extract_features_from_window(window)
-                X_list.append(feats)
-                y_list.append(letter)
-                recording_ids.append((letter, rec_idx))
+                window = rec_data[i : i + window_size]
+
+                if is_flex_only:
+                    # Generate aug_per_window uniform random unit quaternions,
+                    # one per augmented copy — all 50 rows get the SAME quaternion
+                    raw_q = rng.standard_normal((aug_per_window, 4))
+                    quats = raw_q / np.linalg.norm(raw_q, axis=1, keepdims=True)
+                    for q in quats:
+                        aug_win = window.copy()
+                        aug_win[:, 5] = q[0]  # qw
+                        aug_win[:, 6] = q[1]  # qx
+                        aug_win[:, 7] = q[2]  # qy
+                        aug_win[:, 8] = q[3]  # qz
+                        X_list.append(extract_features_from_window(aug_win))
+                        y_list.append(letter)
+                        recording_ids.append((letter, rec_idx))
+                else:
+                    X_list.append(extract_features_from_window(window))
+                    y_list.append(letter)
+                    recording_ids.append((letter, rec_idx))
 
     return np.array(X_list), np.array(y_list), recording_ids
 
@@ -281,8 +299,8 @@ Examples
                         help="Try multiple seeds, keep best (e.g. '1,42,0,123,7')")
     parser.add_argument("--tune", action="store_true",
                         help="Hyperparameter search (slow, ~5-15 min)")
-    parser.add_argument("--aug-sigma", type=float, default=0.04,
-                        help="Quaternion augmentation noise for flex-only letters (default: 0.04)")
+    parser.add_argument("--aug-per-window", type=int, default=8,
+                        help="Random orientations per window for flex-only letters (default: 8)")
     parser.add_argument("--compare", action="store_true",
                         help="Run compare_models.py after training")
     args = parser.parse_args()
@@ -315,15 +333,19 @@ Examples
 
     # ── Load & merge ──────────────────────────────────────────────────────────
     print("Loading data...")
-    combined_df = load_combined_data(input_paths, aug_sigma=args.aug_sigma)
+    combined_df, imu_letters = load_combined_data(input_paths)
+    flex_only_letters = set(combined_df["label"].unique()) - imu_letters
     print()
 
     # ── Build feature matrix ──────────────────────────────────────────────────
     print("Extracting windowed features...")
     X, y, rec_ids = prepare_windows(
         combined_df,
+        flex_only_letters=flex_only_letters,
         window_size=args.window_size,
         stride=args.stride,
+        aug_per_window=args.aug_per_window,
+        seed=args.seed,
     )
     n_samples, n_feats = X.shape
     n_classes = len(np.unique(y))
@@ -418,7 +440,7 @@ Examples
 
     if len(seeds_to_try) > 1:
         print("=" * 60)
-        print(f"Best: seed {best_seed}  →  test {best_test_acc:.4f} "
+        print(f"Best: seed {best_seed}  ->  test {best_test_acc:.4f} "
               f"({best_test_acc * 100:.1f}%)")
         print("=" * 60)
         print()

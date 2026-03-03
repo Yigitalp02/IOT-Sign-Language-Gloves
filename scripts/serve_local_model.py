@@ -21,8 +21,9 @@ from typing import List, Union, Dict, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
-# Priority: newest 97.7% model → 96% model → generic fallback
+# Priority: 21-letter IMU model → old 15-letter fallbacks
 _candidates = [
+    "rf_asl_21letters_imu.pkl",
     "rf_asl_15letters_normalized_97pct_45feat_seed1_feb26.pkl",
     "rf_asl_15letters_normalized_97pct_seed1_feb26.pkl",
     "rf_asl_15letters_normalized_96pct_seed1.pkl",
