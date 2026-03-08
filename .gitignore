@@ -32,6 +32,8 @@ models/*.meta.joblib
 !models/rf_asl_15letters_normalized_97pct_45feat_seed1_feb26.meta.joblib
 !models/rf_asl_21letters_imu.pkl
 !models/rf_asl_21letters_imu.meta.joblib
+!models/rf_asl_21letters_imu_two_staged.pkl
+!models/rf_asl_21letters_imu_two_staged.meta.joblib
 !data/glove_data_schema.csv
 !data/Data/glove_data_NORMALIZED_B_W_D_K_G_H_L_P_Q_R_2026-03-02-08-59-19.csv
 
