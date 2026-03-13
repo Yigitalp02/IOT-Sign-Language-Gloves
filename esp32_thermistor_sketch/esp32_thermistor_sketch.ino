@@ -6,14 +6,15 @@
  *
  * Outputs on:
  *   1. USB Serial → desktop app via cable (115200 baud)
- *   2. WiFi TCP   → desktop/mobile app wirelessly (ESP32 is the Access Point)
+ *   2. WiFi TCP   → desktop/mobile app wirelessly
  *
- * WiFi connection:
- *   SSID     : GloveASL-WiFi
- *   Password : glove1234
- *   ESP32 IP : 192.168.4.1  (default softAP address)
- *   TCP port : 3333
- *   → Connect device to "GloveASL-WiFi", then connect to 192.168.4.1:3333
+ * WiFi connection (Station mode — joins your existing router):
+ *   Set WIFI_SSID / WIFI_PASS below to your home/lab router credentials.
+ *   The ESP32 joins that network and gets an IP from DHCP.
+ *   mDNS hostname: glove.local  (no need to know the IP)
+ *   TCP port     : 3333
+ *   → Both ESP32 and laptop are on the same router — laptop keeps internet.
+ *   → In the desktop app, connect to glove.local:3333
  *
  * Hardware : ESP32 + 5 thermistors on ADC pins 32, 35, 34, 39, 36
  *            (thumb, index, middle, ring, pinky)
@@ -28,11 +29,13 @@
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 
-// ── WiFi Access Point config ──────────────────────────────────────────────────
-#define WIFI_SSID  "GloveASL-WiFi"
-#define WIFI_PASS  "glove1234"   // min 8 chars for WPA2
+// ── WiFi credentials — change these to your router ───────────────────────────
+#define WIFI_SSID  "SoftSensorsLab"
+#define WIFI_PASS  "SoftSensors1324?"
 #define TCP_PORT   3333
+#define MDNS_NAME  "glove"   // reachable at glove.local
 
 // ── IMU pins & address ────────────────────────────────────────────────────────
 #define I2C_SDA  21
@@ -50,7 +53,7 @@ bool imuReady = false;
 
 // ── WiFi TCP server ───────────────────────────────────────────────────────────
 WiFiServer tcpServer(TCP_PORT);
-WiFiClient tcpClient;  // one connected client at a time
+WiFiClient tcpClient;
 
 // ── setup ─────────────────────────────────────────────────────────────────────
 void setup() {
@@ -69,7 +72,7 @@ void setup() {
 
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(100000);
-  Wire.setTimeOut(100);  // critical fix for ESP32 I2C clock stretching
+  Wire.setTimeOut(100);
 
   if (bno.begin()) {
     bno.setExtCrystalUse(true);
@@ -79,16 +82,40 @@ void setup() {
     Serial.println("[IMU] BNO055 NOT FOUND — sending identity quaternion");
   }
 
-  // ── WiFi Access Point ─────────────────────────────────────────────────────
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(WIFI_SSID, WIFI_PASS);
-  IPAddress apIP = WiFi.softAPIP();
-  Serial.print("[WiFi] AP started  SSID: "); Serial.println(WIFI_SSID);
-  Serial.print("[WiFi] IP address : ");       Serial.println(apIP);
-  Serial.print("[WiFi] TCP port   : ");       Serial.println(TCP_PORT);
+  // ── WiFi Station mode — join existing router ──────────────────────────────
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  tcpServer.begin();
-  Serial.println("[READY] Dual-mode: Serial + WiFi TCP (192.168.4.1:3333)");
+  Serial.print("[WiFi] Connecting to ");
+  Serial.print(WIFI_SSID);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println();
+    Serial.print("[WiFi] Connected! IP: ");
+    Serial.println(WiFi.localIP());
+
+    // ── mDNS — advertise as glove.local ──────────────────────────────────
+    if (MDNS.begin(MDNS_NAME)) {
+      MDNS.addService("tcp", "tcp", TCP_PORT);
+      Serial.println("[mDNS] Hostname: " MDNS_NAME ".local");
+    } else {
+      Serial.println("[mDNS] Failed to start — use IP above instead");
+    }
+
+    tcpServer.begin();
+    Serial.print("[TCP]  Listening on port ");
+    Serial.println(TCP_PORT);
+    Serial.println("[READY] Dual-mode: Serial + WiFi TCP (" MDNS_NAME ".local:" + String(TCP_PORT) + ")");
+  } else {
+    Serial.println();
+    Serial.println("[WiFi] Connection FAILED — check SSID/password. Running Serial-only.");
+  }
 }
 
 // ── loop ──────────────────────────────────────────────────────────────────────
@@ -98,6 +125,7 @@ void loop() {
     WiFiClient newClient = tcpServer.available();
     if (newClient) {
       tcpClient = newClient;
+      tcpClient.setNoDelay(true);  // disable Nagle — lower latency at 50 Hz
       Serial.print("[WiFi] Client connected from ");
       Serial.println(tcpClient.remoteIP());
     }

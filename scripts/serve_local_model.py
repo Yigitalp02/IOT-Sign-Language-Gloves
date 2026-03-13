@@ -31,7 +31,8 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 # Priority order: newest format first, legacy fallbacks last
 _candidates = [
-    "rf_asl_v2_gravity_cascade.pkl",           # v2 two-stage gravity (new)
+    "rf_asl_v3_collapsed.pkl",                 # v3 collapsed Stage 1 (best)
+    "rf_asl_v2_gravity_cascade.pkl",           # v2 two-stage gravity
     "rf_asl_21letters_imu_two_staged.pkl",     # professor's cascade
     "rf_asl_15letters_normalized_97pct_45feat_seed1_feb26.pkl",
     "rf_asl_21letters_imu.pkl",
@@ -143,6 +144,8 @@ def startup():
             except Exception:
                 pass
         print(f"Model loaded: {model_name}{acc}")
+        if isinstance(model, dict):
+            print(f"  Model format: dict — keys: {list(model.keys())}")
     else:
         print(f"ERROR: No model found in {MODELS_DIR}")
 
@@ -183,8 +186,13 @@ def predict(sensor_data: SensorData):
         imu_cols = np.tile(sensor_data.imu, (arr.shape[0], 1))   # (N, 4)
         arr = np.hstack([arr, imu_cols])                          # → (N, 9)
 
-    # ── v2 gravity-cascade model ───────────────────────────────────────────────
-    if isinstance(model, dict) and model.get("format") == "v2_gravity_cascade":
+    # ── v3 collapsed Stage 1 + gravity cascade ────────────────────────────────
+    # Stage 1 predicts collapsed super-labels (e.g. "DG", "VHR", "LPQ") or
+    # plain letters. If a super-label is predicted, Stage 2 disambiguates.
+    if isinstance(model, dict) and (
+        model.get("format") == "v3_collapsed_stage1"
+        or "family_label_map" in model
+    ):
         s1  = model["stage_1_model"]
         f1  = extract_features_stage1(arr).reshape(1, -1)
 
@@ -193,7 +201,32 @@ def predict(sensor_data: SensorData):
         pred      = str(s1.predict(f1)[0])
         conf      = float(max(probs1))
 
-        # Stage 2: only runs when Stage 1 lands on a confusable family
+        # If Stage 1 predicted a family super-label, run Stage 2
+        s2_models = model.get("stage_2_models", {})
+        if pred in s2_models:
+            fg   = extract_gravity_features(arr).reshape(1, -1)
+            clf  = s2_models[pred]
+            p2   = clf.predict_proba(fg)[0]
+            pred = str(clf.predict(fg)[0])
+            conf = float(max(p2))
+            for c, p in zip(clf.classes_, p2):
+                prob_dict[str(c)] = float(p)
+
+    # ── v2 gravity-cascade model ───────────────────────────────────────────────
+    # v3 check must run first — v3 also has "stage_2_models"/"families" keys.
+    elif isinstance(model, dict) and (
+        model.get("format") == "v2_gravity_cascade"
+        or ("stage_2_models" in model and "families" in model)
+    ):
+        s1  = model["stage_1_model"]
+        f1  = extract_features_stage1(arr).reshape(1, -1)
+
+        probs1    = s1.predict_proba(f1)[0]
+        prob_dict = {str(c): float(p) for c, p in zip(s1.classes_, probs1)}
+        pred      = str(s1.predict(f1)[0])
+        conf      = float(max(probs1))
+
+        # Stage 2: only runs when Stage 1 lands on a confusable family member
         families  = model.get("families", {})
         s2_models = model.get("stage_2_models", {})
         fg        = extract_gravity_features(arr).reshape(1, -1)
