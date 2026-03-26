@@ -29,8 +29,9 @@ from typing import List, Union, Dict, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
-# Priority: 21-letter IMU model → old 15-letter fallbacks
+# Priority: v4 flex+IMU-rules → older two-stage → legacy fallbacks
 _candidates = [
+    "rf_asl_v4_flex_rules.pkl",
     "rf_asl_15letters_normalized_97pct_45feat_seed1_feb26.pkl",
     "rf_asl_21letters_imu_two_staged.pkl",
     "rf_asl_21letters_imu.pkl",
@@ -76,6 +77,37 @@ def extract_features_stage2(window: np.ndarray) -> np.ndarray:
         # No IMU data — use identity quaternion means
         feats.extend([1.0, 0.0, 0.0, 0.0])
     return np.array(feats, dtype=np.float64)
+
+def apply_v4_imu_rules(flex_pred: str, window: np.ndarray, imu_rules: dict) -> str:
+    """Apply hardcoded threshold IMU rules for v4 model disambiguation."""
+    if window.shape[1] < 9:
+        return flex_pred
+    qw = float(np.mean(window[:, 5]))
+    qx = float(np.mean(window[:, 6]))
+    qy = float(np.mean(window[:, 7]))
+    qz = float(np.mean(window[:, 8]))
+    fwd_z = 2.0 * (qx * qz + qw * qy)
+    up_z  = 1.0 - 2.0 * (qx**2 + qy**2)
+
+    fwd_up     = imu_rules.get("fwd_up_thresh",       0.65)
+    up_palm_dn = imu_rules.get("up_palm_down_thresh",  0.40)
+
+    if flex_pred in ("D", "G"):
+        return "G" if (fwd_z > fwd_up) and (up_z < 0.20) else "D"
+
+    if flex_pred in ("V", "H", "R"):
+        if fwd_z > 0.80:
+            return "R" if up_z < -0.20 else "H"
+        return "V"
+
+    if flex_pred in ("L", "P", "Q"):
+        if fwd_z < -0.50:
+            return "L"
+        if fwd_z > 0.55:
+            return "Q"
+        return "P"
+
+    return flex_pred
 
 def extract_features_from_window(window: np.ndarray) -> np.ndarray:
     """Legacy path: 45 features (5 stats × 9 channels). Used by single-model files."""
@@ -149,8 +181,21 @@ def predict(sensor_data: SensorData):
         imu_cols = np.tile(sensor_data.imu, (arr.shape[0], 1))   # (N, 4)
         arr = np.hstack([arr, imu_cols])                          # → (N, 9)
 
+    # ── v4: flex-only RF + hardcoded deterministic IMU rules ──────────────────
+    if isinstance(model, dict) and model.get("format") == "v4_flex_rules":
+        flex_clf = model["flex_model"]
+        f1       = extract_features_stage1(arr).reshape(1, -1)
+        probs1   = flex_clf.predict_proba(f1)[0]
+        pred     = str(flex_clf.predict(f1)[0])
+        conf     = float(max(probs1))
+        prob_dict = {str(c): float(p) for c, p in zip(flex_clf.classes_, probs1)}
+
+        imu_rules = model.get("imu_rules", {})
+        if imu_rules:
+            pred = apply_v4_imu_rules(pred, arr, imu_rules)
+
     # ── Two-staged model (professor's format) ─────────────────────────────────
-    if isinstance(model, dict) and "stage_1_model" in model:
+    elif isinstance(model, dict) and "stage_1_model" in model:
         s1 = model["stage_1_model"]
         f1 = extract_features_stage1(arr).reshape(1, -1)
         f2 = extract_features_stage2(arr).reshape(1, -1)

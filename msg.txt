@@ -1,0 +1,15 @@
+Add v4 flex-only model training and update local server
+
+- train_model_v4.py: new training script for the v4 architecture —
+  flex-only Random Forest (25 features, no IMU data required during
+  recording) plus physics-based hardcoded IMU disambiguation rules
+  calibrated from real glove quaternion samples:
+    DG  : G only if fwd_z > 0.65 AND up_z < 0.20; else D (default)
+    VHR : fwd_z > 0.80 => R (up_z < -0.20) or H; fwd_z <= 0.80 => V
+    LPQ : fwd_z < -0.50 => L; fwd_z > +0.55 => Q; else P (default)
+  All thresholds are yaw-invariant (compass direction does not matter)
+- rf_asl_v4_flex_rules.rules.json: human-readable rules sidecar
+  generated alongside the .pkl, editable without retraining
+- serve_local_model_one.py: add v4_flex_rules model format support —
+  prioritise rf_asl_v4_flex_rules.pkl in the candidate list and add
+  apply_v4_imu_rules() helper that mirrors the cloud API logic exactly

@@ -1,0 +1,31 @@
+{
+  "fwd_up_thresh": 0.65,
+  "fwd_dn_thresh": -0.2,
+  "up_palm_down_thresh": 0.4,
+  "families": {
+    "DG": {
+      "members": [
+        "D",
+        "G"
+      ],
+      "rule": "D is DEFAULT (works in many orientations). G is EXCEPTION: fwd_z < fwd_up (fingers sideways) AND up_z < up_palm_down (palm toward you, not down). Any other orientation stays D."
+    },
+    "VHR": {
+      "members": [
+        "V",
+        "H",
+        "R"
+      ],
+      "rule": "V is default (fingers up). R stays from flex (crossed). H is EXCEPTION: fwd_z < fwd_up (fingers sideways)."
+    },
+    "LPQ": {
+      "members": [
+        "L",
+        "P",
+        "Q"
+      ],
+      "rule": "L: fwd_z < -0.50 (fingers UP \u2192 very negative fwd_z=-0.921).  Q: fwd_z > +0.55 (fingers DOWN \u2192 fwd_z=+0.844).  P: DEFAULT (fingers forward, moderate fwd_z=+0.222)."
+    }
+  },
+  "_note": "fwd_z: +1=fingers up, 0=sideways, -1=down  |  up_z: +1=palm faces down (back-of-hand up), 0=palm sideways, -1=palm faces up  |  All three are yaw-invariant (compass direction doesn't matter)"
+}
