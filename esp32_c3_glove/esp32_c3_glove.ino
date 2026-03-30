@@ -2,9 +2,13 @@
  * ESP32-C3 Glove — ADS1115 16-bit ADC + BNO055 + WiFi TCP + USB Serial
  *
  * Based on prof's hardware revision. Sends 5-finger flex data + BNO055
- * quaternion at 50 Hz in CSV format — identical to v1, so desktop & mobile
- * apps need NO changes:
- *   "thumb,index,middle,ring,pinky,qw,qx,qy,qz\n"
+ * quaternion + linear acceleration + gyroscope at 50 Hz in CSV format.
+ * Existing apps only read the first 9 columns so they need no changes.
+ *   "thumb,index,middle,ring,pinky,qw,qx,qy,qz,lx,ly,lz,gx,gy,gz\n"
+ *    col:  0     1      2      3    4   5  6  7  8  9 10 11 12 13 14
+ *
+ *   lx,ly,lz — linear acceleration [m/s²], gravity removed (≈0 when still)
+ *   gx,gy,gz — angular velocity     [deg/s] (wrist rotation speed)
  *
  * Hardware changes from v1 (esp32_thermistor_sketch):
  *   - Board    : ESP32-C3 (instead of standard ESP32)
@@ -89,7 +93,7 @@ void setup() {
   if (bnoFound && bno.begin()) {
     bno.setExtCrystalUse(true);
     imuReady = true;
-    Serial.println("[IMU] BNO055 initialised — quaternion output enabled");
+    Serial.println("[IMU] BNO055 initialised — quaternion + linear accel + gyroscope enabled");
   } else {
     Serial.println("[IMU] BNO055 NOT FOUND — sending identity quaternion (1,0,0,0)");
   }
@@ -163,21 +167,37 @@ void loop() {
     v[i] = adsReady ? ads.readADC_SingleEnded(4 - i) : 0;
   }
 
-  // ── IMU quaternion ────────────────────────────────────────────────────────
+  // ── IMU quaternion + linear accel + gyroscope ────────────────────────────
   float qw = 1.0f, qx = 0.0f, qy = 0.0f, qz = 0.0f;
+  float lx = 0.0f, ly = 0.0f, lz = 0.0f;  // linear acceleration [m/s²]
+  float gx = 0.0f, gy = 0.0f, gz = 0.0f;  // angular velocity    [deg/s]
   if (imuReady) {
     imu::Quaternion q = bno.getQuat();
     qw = (float)q.w();
     qx = (float)q.x();
     qy = (float)q.y();
     qz = (float)q.z();
+
+    imu::Vector<3> la = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    lx = (float)la.x();
+    ly = (float)la.y();
+    lz = (float)la.z();
+
+    imu::Vector<3> gy3 = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
+    gx = (float)gy3.x();
+    gy = (float)gy3.y();
+    gz = (float)gy3.z();
   }
 
-  // ── Build CSV — format identical to v1, apps need no changes ─────────────
-  // "thumb,index,middle,ring,pinky,qw,qx,qy,qz\n"
-  char csv[80];
-  snprintf(csv, sizeof(csv), "%d,%d,%d,%d,%d,%.4f,%.4f,%.4f,%.4f\n",
-           v[0], v[1], v[2], v[3], v[4], qw, qx, qy, qz);
+  // ── Build CSV ─────────────────────────────────────────────────────────────
+  // "thumb,index,middle,ring,pinky,qw,qx,qy,qz,lx,ly,lz,gx,gy,gz\n"
+  char csv[128];
+  snprintf(csv, sizeof(csv),
+           "%d,%d,%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f\n",
+           v[0], v[1], v[2], v[3], v[4],
+           qw, qx, qy, qz,
+           lx, ly, lz,
+           gx, gy, gz);
 
   // ── Output 1: USB Serial ─────────────────────────────────────────────────
   Serial.print(csv);
