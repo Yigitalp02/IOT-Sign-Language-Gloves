@@ -12,7 +12,7 @@
  *
  * Hardware changes from v1 (esp32_thermistor_sketch):
  *   - Board    : ESP32-C3 (instead of standard ESP32)
- *   - F0 thumb : ESP32-C3 built-in ADC, GPIO 0 (12-bit, 0-4095)
+ *   - F0 thumb : ESP32-C3 built-in ADC, GPIO 1 (12-bit, 0-4095)
  *   - F1-F4    : ADS1115 external 16-bit ADC via I2C
  *                Channels are board-inverted: F1→A3, F2→A2, F3→A1, F4→A0
  *                Full 16-bit values sent (0-~26000 at 3.3V with GAIN_ONE)
@@ -56,7 +56,7 @@ Adafruit_ADS1115 ads;
 bool adsReady = false;
 
 // ── F0 pin — ESP32-C3 built-in 12-bit ADC (thumb) ────────────────────────────
-#define F0_PIN  0
+#define F0_PIN  1
 
 // ── WiFi TCP server ───────────────────────────────────────────────────────────
 WiFiServer tcpServer(TCP_PORT);

@@ -29,8 +29,11 @@ from typing import List, Union, Dict, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
-# Priority: v4 flex+IMU-rules → older two-stage → legacy fallbacks
+# Priority: v5 → v3_combined → v3 → v4 → older two-stage → legacy fallbacks
 _candidates = [
+    "rf_asl_v5_multifamily.pkl",
+    "rf_asl_v3_combined.pkl",
+    "rf_asl_v3_collapsed.pkl",
     "rf_asl_v4_flex_rules.pkl",
     "rf_asl_15letters_normalized_97pct_45feat_seed1_feb26.pkl",
     "rf_asl_21letters_imu_two_staged.pkl",
@@ -77,6 +80,24 @@ def extract_features_stage2(window: np.ndarray) -> np.ndarray:
         # No IMU data — use identity quaternion means
         feats.extend([1.0, 0.0, 0.0, 0.0])
     return np.array(feats, dtype=np.float64)
+
+def gravity_features_v3(window: np.ndarray) -> np.ndarray:
+    """6 yaw-invariant gravity features used by v3 Stage 2.
+    Columns 5-8 must be qw, qx, qy, qz (same layout as training data).
+    """
+    qw = window[:, 5].astype(float)
+    qx = window[:, 6].astype(float)
+    qy = window[:, 7].astype(float)
+    qz = window[:, 8].astype(float)
+    fwd_z   = 2.0 * (qx * qz + qw * qy)
+    up_z    = 1.0 - 2.0 * (qx**2 + qy**2)
+    right_z = 2.0 * (qy * qz - qw * qx)
+    return np.array([
+        float(np.mean(fwd_z)),   float(np.std(fwd_z))   if len(fwd_z)   >= 2 else 0.0,
+        float(np.mean(up_z)),    float(np.std(up_z))    if len(up_z)    >= 2 else 0.0,
+        float(np.mean(right_z)), float(np.std(right_z)) if len(right_z) >= 2 else 0.0,
+    ], dtype=np.float64)
+
 
 def apply_v4_imu_rules(flex_pred: str, window: np.ndarray, imu_rules: dict) -> str:
     """Apply hardcoded threshold IMU rules for v4 model disambiguation."""
@@ -181,8 +202,37 @@ def predict(sensor_data: SensorData):
         imu_cols = np.tile(sensor_data.imu, (arr.shape[0], 1))   # (N, 4)
         arr = np.hstack([arr, imu_cols])                          # → (N, 9)
 
+    # ── v3 / v5: collapsed Stage 1 (flex) + gravity Stage 2 per family ─────
+    # v3_collapsed_stage1: families DG, VHR, LPQ
+    # v5_multifamily:      families VHRU, AT, ES, DG, LPQ  (same inference logic)
+    if isinstance(model, dict) and model.get("format") in (
+        "v3_collapsed_stage1", "v5_multifamily"
+    ):
+        s1_clf          = model["stage_1_model"]
+        s2_models       = model.get("stage_2_models", {})
+        family_label_map = model.get("family_label_map", {})
+
+        f1        = extract_features_stage1(arr).reshape(1, -1)
+        probs1    = s1_clf.predict_proba(f1)[0]
+        collapsed = str(s1_clf.predict(f1)[0])
+        conf      = float(max(probs1))
+        prob_dict = {str(c): float(p) for c, p in zip(s1_clf.classes_, probs1)}
+
+        # Stage 2: if Stage 1 predicted a family super-label, run the family classifier
+        if collapsed in s2_models and arr.shape[1] >= 9:
+            s2_clf = s2_models[collapsed]
+            f2     = gravity_features_v3(arr).reshape(1, -1)
+            p2     = s2_clf.predict_proba(f2)[0]
+            pred   = str(s2_clf.predict(f2)[0])
+            conf   = float(max(p2))
+            for c, p in zip(s2_clf.classes_, p2):
+                prob_dict[str(c)] = float(p)
+        else:
+            # Not a family, collapsed label IS the final prediction
+            pred = collapsed
+
     # ── v4: flex-only RF + hardcoded deterministic IMU rules ──────────────────
-    if isinstance(model, dict) and model.get("format") == "v4_flex_rules":
+    elif isinstance(model, dict) and model.get("format") == "v4_flex_rules":
         flex_clf = model["flex_model"]
         f1       = extract_features_stage1(arr).reshape(1, -1)
         probs1   = flex_clf.predict_proba(f1)[0]
