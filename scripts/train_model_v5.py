@@ -53,11 +53,12 @@ warnings.filterwarnings("ignore")
 
 # ── Letter families ────────────────────────────────────────────────────────────
 FAMILIES: dict[str, list[str]] = {
-    "VHRU": ["V", "H", "R", "U"],
-    "AT":   ["A", "T"],
-    "ES":   ["E", "S"],
-    "DG":   ["D", "G"],
-    "LPQ":  ["L", "P", "Q"],
+    "VHR": ["V", "H", "R"],
+    "KU":  ["K", "U"],
+    "AT":  ["A", "T"],
+    "ES":  ["E", "S"],
+    "DG":  ["D", "G"],
+    "LPQ": ["L", "P", "Q"],
 }
 
 FAMILY_LABEL_MAP: dict[str, str] = {
@@ -72,20 +73,38 @@ IMU_COLS  = ["qw", "qx", "qy", "qz"]
 ALL_COLS  = FLEX_COLS + IMU_COLS
 
 # ── Default data sources (selectively pick letters from each file) ─────────────
-_OLD_CSV = (
+#
+#  FILE1 (newest, Apr 6 v2) — K with IMU orientation + U re-recorded
+_FILE1_CSV = (
+    "data/Data/"
+    "glove_data_NORMALIZED_A_T_V_H_R_U_K_"
+    "2026-04-06-12-00-16.csv"
+)
+_FILE1_LETTERS = ["K", "U"]
+
+#  FILE2 (Apr 6 v1) — A, T, V, H, R re-recorded with correct orientations
+_FILE2_CSV = (
+    "data/Data/"
+    "glove_data_NORMALIZED_A_T_V_H_R_U_"
+    "2026-04-06-11-17-11.csv"
+)
+_FILE2_LETTERS = ["A", "T", "V", "H", "R"]
+
+#  FILE3 (March 10) — stable letters that were already accurate
+_FILE3_CSV = (
     "data/Data/"
     "glove_data_NORMALIZED_A_B_C_D_E_F_I_G_K_O_L_S_H_R_P_Q_T_V_W_X_Y_"
     "2026-03-10-12-56-47.csv"
 )
-_NEW_CSV = (
+_FILE3_LETTERS = ["B", "C", "F", "I", "O", "W", "X", "Y", "D", "G"]
+
+#  FILE4 (April 3) — re-recorded E, S, L, P, Q
+_FILE4_CSV = (
     "data/Data/"
     "glove_data_NORMALIZED_B_W_V_H_R_S_E_A_T_U_L_P_Q_"
     "2026-04-03-11-58-32.csv"
 )
-# Letters that are already accurate in the old dataset — keep from old CSV
-_OLD_LETTERS = ["C", "F", "I", "O", "X", "Y", "K", "D", "G"]
-# Re-recorded / new letters — take from the new CSV
-_NEW_LETTERS = ["B", "W", "V", "H", "R", "S", "E", "A", "T", "U", "L", "P", "Q"]
+_FILE4_LETTERS = ["E", "S", "L", "P", "Q"]
 
 
 # ── Feature extraction ─────────────────────────────────────────────────────────
@@ -309,8 +328,10 @@ def train(args) -> int:
     # ── Load selectively ──────────────────────────────────────────────────────
     print("Loading data (selective per-file)...")
     file_letter_pairs = [
-        (str(project_root / _OLD_CSV), _OLD_LETTERS),
-        (str(project_root / _NEW_CSV), _NEW_LETTERS),
+        (str(project_root / _FILE1_CSV), _FILE1_LETTERS),
+        (str(project_root / _FILE2_CSV), _FILE2_LETTERS),
+        (str(project_root / _FILE3_CSV), _FILE3_LETTERS),
+        (str(project_root / _FILE4_CSV), _FILE4_LETTERS),
     ]
     df = load_selective(file_letter_pairs)
     available_letters = set(df["label"].unique())
@@ -427,8 +448,10 @@ def train(args) -> int:
         "s1_cv_accuracy":       float(cv_scores.mean()),
         "s2_families_trained":  sorted(s2_models.keys()),
         "timestamp":            datetime.now().isoformat(),
-        "data_old_csv_letters": _OLD_LETTERS,
-        "data_new_csv_letters": _NEW_LETTERS,
+        "data_file1_letters": _FILE1_LETTERS,
+        "data_file2_letters": _FILE2_LETTERS,
+        "data_file3_letters": _FILE3_LETTERS,
+        "data_file4_letters": _FILE4_LETTERS,
     }
     meta_path = out_path.with_suffix(".meta.joblib")
     joblib.dump(meta, meta_path)
