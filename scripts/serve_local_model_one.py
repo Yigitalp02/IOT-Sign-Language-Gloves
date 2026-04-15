@@ -8,6 +8,13 @@ Usage:
   cd iot-sign-glove && python scripts/serve_local_model.py
   # Server runs at http://localhost:8765
 """
+
+# MUST be called before any other imports when running as a PyInstaller frozen
+# executable. Without this, joblib/sklearn's multiprocessing workers crash on
+# Windows because they try to re-import the frozen entry-point module.
+import multiprocessing
+multiprocessing.freeze_support()
+
 import warnings
 # Suppress noisy sklearn/joblib version-mismatch warnings from RF parallel prediction
 warnings.filterwarnings(
@@ -17,6 +24,8 @@ warnings.filterwarnings(
     module="sklearn",
 )
 
+import sys
+import os
 import time
 import numpy as np
 import joblib
@@ -26,9 +35,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Union, Dict, Optional
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-MODELS_DIR = PROJECT_ROOT / "models"
+# When frozen by PyInstaller, sys.frozen is True and sys._MEIPASS is the
+# temporary directory where the bundle is extracted at runtime (--onefile mode).
+# Any --add-data files land there, so models/ is at _MEIPASS/models/.
+if getattr(sys, 'frozen', False):
+    _base = Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent))
+else:
+    _base = Path(__file__).resolve().parent.parent  # iot-sign-glove/
+
+MODELS_DIR = Path(os.environ.get('ASL_MODELS_DIR', str(_base / 'models')))
 # Priority: v5 → v3_combined → v3 → v4 → older two-stage → legacy fallbacks
 _candidates = [
     "rf_asl_v5_multifamily.pkl",
@@ -141,6 +156,37 @@ def extract_features_from_window(window: np.ndarray) -> np.ndarray:
         feats.extend(_safe_stats(window[:, i]))
     return np.array(feats, dtype=np.float64)
 
+def _force_sequential(obj, _visited=None):
+    """Recursively set n_jobs=1 on every sklearn estimator inside `obj`.
+
+    When running as a PyInstaller frozen exe, joblib's parallel backends
+    (loky / multiprocessing) try to spawn worker processes that re-execute the
+    frozen entry-point, which fails on Windows. Forcing n_jobs=1 switches every
+    estimator to single-threaded execution, avoiding the crash entirely.
+    """
+    if _visited is None:
+        _visited = set()
+    obj_id = id(obj)
+    if obj_id in _visited:
+        return
+    _visited.add(obj_id)
+
+    if hasattr(obj, 'n_jobs'):
+        obj.n_jobs = 1
+    # Recurse into dicts (our two-stage model format stores sub-estimators in a dict)
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _force_sequential(v, _visited)
+    # Recurse into lists/tuples (e.g. VotingClassifier estimators)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _force_sequential(v, _visited)
+    # Recurse into common sklearn meta-estimator attributes
+    for attr in ('estimators_', 'estimators', 'base_estimator_', 'best_estimator_'):
+        if hasattr(obj, attr):
+            _force_sequential(getattr(obj, attr), _visited)
+
+
 app = FastAPI(title="ASL Local Model (Dev)", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -152,6 +198,9 @@ def startup():
     global model, model_name
     if MODEL_PATH and MODEL_PATH.exists():
         model = joblib.load(MODEL_PATH)
+        # Force single-threaded inference — required in PyInstaller frozen builds
+        # where joblib's multiprocessing workers cannot re-import the frozen module.
+        _force_sequential(model)
         model_name = MODEL_PATH.stem
         meta_path = MODEL_PATH.with_suffix(".meta.joblib")
         acc = ""
@@ -344,8 +393,39 @@ def health():
         "model_name": model_name,
     }
 
+def _wait_for_port(port: int, timeout: int = 30) -> bool:
+    """
+    Try to pre-bind the port until it becomes available.
+
+    When the previous server is killed, Windows keeps the port in TCP TIME_WAIT
+    for up to 60 seconds. We poll every second until the port is free or we time out.
+    Returns True if the port became available, False on timeout.
+    """
+    import socket
+    deadline = time.time() + timeout
+    attempt = 0
+    while time.time() < deadline:
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("", port))
+            probe.close()
+            return True
+        except OSError:
+            probe.close()
+            attempt += 1
+            if attempt == 1:
+                print(f"Port {port} in TIME_WAIT, waiting up to {timeout}s for it to be released...")
+            time.sleep(1)
+    return False
+
+
 if __name__ == "__main__":
     import uvicorn
-    print("Starting local ASL model server at http://localhost:8765")
+    PORT = 8765
+    if not _wait_for_port(PORT, timeout=30):
+        print(f"ERROR: Port {PORT} did not become free within 30s. Exiting.")
+        sys.exit(1)
+    print(f"Starting local ASL model server at http://localhost:{PORT}")
     print("Use 'Use local model (dev)' switch in the desktop app to connect.")
-    uvicorn.run(app, host="0.0.0.0", port=8765)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

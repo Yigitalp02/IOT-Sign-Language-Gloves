@@ -74,21 +74,29 @@ ALL_COLS  = FLEX_COLS + IMU_COLS
 
 # ── Default data sources (selectively pick letters from each file) ─────────────
 #
-#  FILE1 (newest, Apr 6 v2) — K with IMU orientation + U re-recorded
+#  FILE0 (Apr 7 v3) — V, H, R, D, G re-recorded with correct finger orientations
+_FILE0_CSV = (
+    "data/Data/"
+    "glove_data_NORMALIZED_V_H_R_D_G_"
+    "2026-04-07-09-08-04.csv"
+)
+_FILE0_LETTERS = ["V", "H", "R", "D", "G"]
+
+#  FILE1 (Apr 7 v1) — K and U re-recorded in correct natural orientations
 _FILE1_CSV = (
     "data/Data/"
-    "glove_data_NORMALIZED_A_T_V_H_R_U_K_"
-    "2026-04-06-12-00-16.csv"
+    "glove_data_NORMALIZED_K_U_"
+    "2026-04-07-07-24-09.csv"
 )
 _FILE1_LETTERS = ["K", "U"]
 
-#  FILE2 (Apr 6 v1) — A, T, V, H, R re-recorded with correct orientations
+#  FILE2 (Apr 6 v1) — A and T re-recorded with correct orientations
 _FILE2_CSV = (
     "data/Data/"
     "glove_data_NORMALIZED_A_T_V_H_R_U_"
     "2026-04-06-11-17-11.csv"
 )
-_FILE2_LETTERS = ["A", "T", "V", "H", "R"]
+_FILE2_LETTERS = ["A", "T"]
 
 #  FILE3 (March 10) — stable letters that were already accurate
 _FILE3_CSV = (
@@ -96,7 +104,7 @@ _FILE3_CSV = (
     "glove_data_NORMALIZED_A_B_C_D_E_F_I_G_K_O_L_S_H_R_P_Q_T_V_W_X_Y_"
     "2026-03-10-12-56-47.csv"
 )
-_FILE3_LETTERS = ["B", "C", "F", "I", "O", "W", "X", "Y", "D", "G"]
+_FILE3_LETTERS = ["B", "C", "F", "I", "O", "W", "X", "Y"]
 
 #  FILE4 (April 3) — re-recorded E, S, L, P, Q
 _FILE4_CSV = (
@@ -328,6 +336,7 @@ def train(args) -> int:
     # ── Load selectively ──────────────────────────────────────────────────────
     print("Loading data (selective per-file)...")
     file_letter_pairs = [
+        (str(project_root / _FILE0_CSV), _FILE0_LETTERS),
         (str(project_root / _FILE1_CSV), _FILE1_LETTERS),
         (str(project_root / _FILE2_CSV), _FILE2_LETTERS),
         (str(project_root / _FILE3_CSV), _FILE3_LETTERS),
