@@ -44,6 +44,12 @@ else:
     _base = Path(__file__).resolve().parent.parent  # iot-sign-glove/
 
 MODELS_DIR = Path(os.environ.get('ASL_MODELS_DIR', str(_base / 'models')))
+
+# When True, Stage 2 (gravity-based family disambiguation) is always skipped.
+# Stage 1 returns the family super-label (e.g. "VHR", "DG") for IMU-required
+# letters, and the desktop app's direction calibrator resolves the final letter.
+# Set to False to restore the original two-stage server-side behaviour.
+STAGE1_ONLY = True
 # Priority: v5 → v3_combined → v3 → v4 → older two-stage → legacy fallbacks
 _candidates = [
     "rf_asl_v5_multifamily.pkl",
@@ -231,6 +237,14 @@ class PredictionResponse(BaseModel):
 @app.post("/predict", response_model=PredictionResponse)
 def predict(sensor_data: SensorData):
     start = time.time()
+    try:
+        return _predict_impl(sensor_data, start)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise
+
+def _predict_impl(sensor_data: SensorData, start: float) -> PredictionResponse:
     if model is None:
         return PredictionResponse(
             letter="?",
@@ -267,8 +281,9 @@ def predict(sensor_data: SensorData):
         conf      = float(max(probs1))
         prob_dict = {str(c): float(p) for c, p in zip(s1_clf.classes_, probs1)}
 
-        # Stage 2: if Stage 1 predicted a family super-label, run the family classifier
-        if collapsed in s2_models and arr.shape[1] >= 9:
+        # Stage 2: if Stage 1 predicted a family super-label, run the family classifier.
+        # Skipped when STAGE1_ONLY=True — the desktop direction calibrator handles it.
+        if not STAGE1_ONLY and collapsed in s2_models and arr.shape[1] >= 9:
             s2_clf = s2_models[collapsed]
             f2     = gravity_features_v3(arr).reshape(1, -1)
             p2     = s2_clf.predict_proba(f2)[0]
@@ -277,7 +292,7 @@ def predict(sensor_data: SensorData):
             for c, p in zip(s2_clf.classes_, p2):
                 prob_dict[str(c)] = float(p)
         else:
-            # Not a family, collapsed label IS the final prediction
+            # Not a family, or Stage 2 disabled — collapsed label IS the final prediction
             pred = collapsed
 
     # ── v4: flex-only RF + hardcoded deterministic IMU rules ──────────────────
@@ -424,8 +439,11 @@ if __name__ == "__main__":
     import uvicorn
     PORT = 8765
     if not _wait_for_port(PORT, timeout=30):
-        print(f"ERROR: Port {PORT} did not become free within 30s. Exiting.")
-        sys.exit(1)
+        # Port didn't free up in time — proceed anyway and let uvicorn try.
+        # This happens when a previous instance is being killed and Windows
+        # hasn't fully released the socket yet. Uvicorn uses SO_REUSEADDR
+        # internally, so it will succeed once the OS recycles the port.
+        print(f"WARNING: Port {PORT} may still be in use — attempting to start anyway...")
     print(f"Starting local ASL model server at http://localhost:{PORT}")
     print("Use 'Use local model (dev)' switch in the desktop app to connect.")
     uvicorn.run(app, host="0.0.0.0", port=PORT)

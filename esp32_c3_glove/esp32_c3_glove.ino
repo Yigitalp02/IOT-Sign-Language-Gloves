@@ -1,31 +1,40 @@
 /*
  * ESP32-C3 Glove — ADS1115 16-bit ADC + BNO055 + WiFi TCP + USB Serial
+ *                  + ESP-NOW receiver for armband IMUs (Q1 upper arm, Q2 forearm)
  *
  * Based on prof's hardware revision. Sends 5-finger flex data + BNO055
  * quaternion + linear acceleration + gyroscope at 50 Hz in CSV format.
- * Existing apps only read the first 9 columns so they need no changes.
- *   "thumb,index,middle,ring,pinky,qw,qx,qy,qz,lx,ly,lz,gx,gy,gz\n"
- *    col:  0     1      2      3    4   5  6  7  8  9 10 11 12 13 14
  *
- *   lx,ly,lz — linear acceleration [m/s²], gravity removed (≈0 when still)
- *   gx,gy,gz — angular velocity     [deg/s] (wrist rotation speed)
+ * Extended CSV format (23 columns — first 15 UNCHANGED, fully backward compatible):
+ *   "thumb,index,middle,ring,pinky,qw,qx,qy,qz,lx,ly,lz,gx,gy,gz,q1w,q1x,q1y,q1z,q2w,q2x,q2y,q2z\n"
+ *    col:  0     1      2      3    4   5  6  7  8  9 10 11 12 13 14  15  16  17  18  19  20  21  22
  *
- * Hardware changes from v1 (esp32_thermistor_sketch):
- *   - Board    : ESP32-C3 (instead of standard ESP32)
+ *   lx,ly,lz  — linear acceleration [m/s²], gravity removed (≈0 when still)
+ *   gx,gy,gz  — angular velocity     [deg/s] (wrist rotation speed)
+ *   Q1 (cols 15-18) — upper arm / triceps armband (ESP32-S3, id=1)
+ *   Q2 (cols 19-22) — forearm armband             (ESP32-S3, id=2)
+ *   When armbands are not connected Q1 and Q2 stay at identity (1,0,0,0).
+ *
+ * Hardware (unchanged from v2):
+ *   - Board    : ESP32-C3
  *   - F0 thumb : ESP32-C3 built-in ADC, GPIO 1 (12-bit, 0-4095)
  *   - F1-F4    : ADS1115 external 16-bit ADC via I2C
  *                Channels are board-inverted: F1→A3, F2→A2, F3→A1, F4→A0
- *                Full 16-bit values sent (0-~26000 at 3.3V with GAIN_ONE)
- *                NOTE: Per-finger calibration in the app handles the
- *                      different scale between F0 (12-bit) and F1-F4 (16-bit).
  *   - I2C      : SDA=4, SCL=5
  *   - BNO_RST  : GPIO 6
  *
- * WiFi (Station mode — same as v1):
- *   Set WIFI_SSID / WIFI_PASS to your router credentials.
+ * WiFi (Station mode — unchanged):
  *   mDNS hostname : glove.local
  *   TCP port      : 3333
- *   → Connect in the app with: glove.local:3333
+ *
+ * ── ARMBAND SETUP ─────────────────────────────────────────────────────────────
+ *   The two ESP32-S3 armbands send their quaternion via ESP-NOW. They must be
+ *   flashed with THIS board's MAC address as their broadcastAddress[].
+ *   Find it in Serial Monitor at first boot:
+ *     "[ESP-NOW] This board MAC: XX:XX:XX:XX:XX:XX"
+ *   Update broadcastAddress[] in both armband .ino files to that MAC,
+ *   set id=1 for the upper-arm (triceps) band and id=2 for the forearm band,
+ *   then re-flash both armbands.
  */
 
 #include <Wire.h>
@@ -35,6 +44,7 @@
 #include <Adafruit_ADS1X15.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <esp_now.h>
 
 // ── WiFi credentials — change these to your router ───────────────────────────
 #define WIFI_SSID  "SoftSensorsLab"
@@ -61,6 +71,38 @@ bool adsReady = false;
 // ── WiFi TCP server ───────────────────────────────────────────────────────────
 WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
+
+// ── ESP-NOW — armband quaternion data ────────────────────────────────────────
+// Struct must exactly match the struct_message in both armband .ino files.
+typedef struct {
+  int   id;   // 1 = upper arm (triceps), 2 = forearm
+  float w;
+  float x;
+  float y;
+  float z;
+} ArmPacket;
+
+// Latest quaternion from each armband.
+// Defaults to identity so columns 15-22 read 1,0,0,0,1,0,0,0 when
+// armbands are off — no garbage in the CSV.
+// volatile: written by the ESP-NOW WiFi-task callback, read by loop().
+volatile float q1w = 1.0f, q1x = 0.0f, q1y = 0.0f, q1z = 0.0f;  // upper arm
+volatile float q2w = 1.0f, q2x = 0.0f, q2y = 0.0f, q2z = 0.0f;  // forearm
+
+// Called automatically by the ESP-NOW driver whenever a packet arrives.
+// Runs in the WiFi task — keep it short, no Serial prints.
+// Signature uses mac_addr (Arduino core 2.x style; core 3.x uses esp_now_recv_info*).
+void IRAM_ATTR onArmData(const uint8_t *mac_addr, const uint8_t *data, int len) {
+  if (len != sizeof(ArmPacket)) return;   // wrong packet size — ignore
+  ArmPacket pkt;
+  memcpy(&pkt, data, sizeof(pkt));
+
+  if (pkt.id == 1) {
+    q1w = pkt.w;  q1x = pkt.x;  q1y = pkt.y;  q1z = pkt.z;
+  } else if (pkt.id == 2) {
+    q2w = pkt.w;  q2x = pkt.x;  q2y = pkt.y;  q2z = pkt.z;
+  }
+}
 
 // ── setup ─────────────────────────────────────────────────────────────────────
 void setup() {
@@ -116,6 +158,8 @@ void setup() {
   Serial.println("[ADC] F0 (thumb) on ESP32-C3 ADC GPIO " + String(F0_PIN) + " (12-bit)");
 
   // ── WiFi Station mode ─────────────────────────────────────────────────────
+  // WiFi.mode(WIFI_STA) must be called before esp_now_init() so both share
+  // the same radio in station mode.
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("[WiFi] Connecting to " WIFI_SSID);
@@ -142,6 +186,19 @@ void setup() {
   } else {
     Serial.println("\n[WiFi] Connection FAILED — check SSID/password. Running Serial-only.");
   }
+
+  // ── ESP-NOW receiver (armband IMUs) ───────────────────────────────────────
+  // Print this board's MAC so you can paste it into the armband firmware.
+  Serial.printf("[ESP-NOW] This board MAC: %s\n", WiFi.macAddress().c_str());
+  Serial.println("[ESP-NOW] Update broadcastAddress[] in armband .ino files to that MAC.");
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("[ESP-NOW] Init FAILED — armband IMUs will not be received.");
+    Serial.println("[ESP-NOW]   Q1/Q2 columns will stay at identity (1,0,0,0).");
+  } else {
+    esp_now_register_recv_cb(onArmData);
+    Serial.println("[ESP-NOW] Ready — waiting for armband packets (id=1 upper arm, id=2 forearm).");
+  }
 }
 
 // ── loop ──────────────────────────────────────────────────────────────────────
@@ -167,7 +224,7 @@ void loop() {
     v[i] = adsReady ? ads.readADC_SingleEnded(4 - i) : 0;
   }
 
-  // ── IMU quaternion + linear accel + gyroscope ────────────────────────────
+  // ── IMU quaternion + linear accel + gyroscope (wrist — Q0) ───────────────
   float qw = 1.0f, qx = 0.0f, qy = 0.0f, qz = 0.0f;
   float lx = 0.0f, ly = 0.0f, lz = 0.0f;  // linear acceleration [m/s²]
   float gx = 0.0f, gy = 0.0f, gz = 0.0f;  // angular velocity    [deg/s]
@@ -189,15 +246,29 @@ void loop() {
     gz = (float)gy3.z();
   }
 
+  // ── Snapshot armband quaternions (volatile → local, safe single read) ────
+  float a1w = q1w, a1x = q1x, a1y = q1y, a1z = q1z;  // upper arm
+  float a2w = q2w, a2x = q2x, a2y = q2y, a2z = q2z;  // forearm
+
   // ── Build CSV ─────────────────────────────────────────────────────────────
-  // "thumb,index,middle,ring,pinky,qw,qx,qy,qz,lx,ly,lz,gx,gy,gz\n"
-  char csv[128];
+  // Cols 0-14: UNCHANGED — existing desktop/mobile apps read only these.
+  // Cols 15-22: NEW — arm IMUs; identity when armbands are off.
+  //
+  // "thumb,index,middle,ring,pinky,qw,qx,qy,qz,lx,ly,lz,gx,gy,gz,q1w,q1x,q1y,q1z,q2w,q2x,q2y,q2z\n"
+  char csv[256];
   snprintf(csv, sizeof(csv),
-           "%d,%d,%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f\n",
+           "%d,%d,%d,%d,%d,"          // cols  0-4  flex sensors
+           "%.4f,%.4f,%.4f,%.4f,"     // cols  5-8  wrist quaternion Q0
+           "%.3f,%.3f,%.3f,"          // cols  9-11 linear accel
+           "%.2f,%.2f,%.2f,"          // cols 12-14 gyroscope
+           "%.4f,%.4f,%.4f,%.4f,"     // cols 15-18 upper arm Q1
+           "%.4f,%.4f,%.4f,%.4f\n",   // cols 19-22 forearm Q2
            v[0], v[1], v[2], v[3], v[4],
            qw, qx, qy, qz,
            lx, ly, lz,
-           gx, gy, gz);
+           gx, gy, gz,
+           a1w, a1x, a1y, a1z,
+           a2w, a2x, a2y, a2z);
 
   // ── Output 1: USB Serial ─────────────────────────────────────────────────
   Serial.print(csv);
